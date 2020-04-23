@@ -203,22 +203,16 @@ def preprocess(x, y):
 
     return x, y, tokenizer_x, tokenizer_y
 
-def train(x, y, x_tk, y_tk, encoder, decoder, optimizer, criterion, device):
+def forward(x, y, encoder, decoder, criterion, pad_token, target_length, device):
 
-    # x: tensor(batch_size, input_length)
-
-    optimizer.zero_grad()
     loss = 0
+    batch_size = x.size(0)
 
-    batch_size = y.size(0)
-    target_length = y.size(1)
-
-    # train encoder
+    # encoder
     encoder_hidden = torch.zeros(1, batch_size, encoder.hidden_size, device=device)
     encoder_outputs, encoder_hidden = encoder(x, encoder_hidden)
 
-    # train decoder
-    pad_token = y_tk.word_index['<PAD>']
+    # decoder
     decoder_input = torch.tensor(pad_token, dtype=torch.long, device=device).expand(batch_size, 1)
     decoder_hidden = encoder_hidden
 
@@ -230,8 +224,23 @@ def train(x, y, x_tk, y_tk, encoder, decoder, optimizer, criterion, device):
 
         loss += criterion(decoder_output, y[:,i])
 
+    return loss
+
+def train(x, y, encoder, decoder, optimizer, criterion, pad_token, target_length, device):
+
+    # x: tensor(batch_size, input_length)
+
+    optimizer.zero_grad()
+    loss = forward(x, y, encoder, decoder, criterion, pad_token, target_length, device)
     loss.backward()
     optimizer.step()
+
+    return loss.item() / target_length
+
+def validate(x, y, encoder, decoder, criterion, pad_token, target_length, device):
+
+    with torch.no_grad():
+        loss = forward(x, y, encoder, decoder, criterion, pad_token, target_length, device)
 
     return loss.item() / target_length
 
@@ -242,6 +251,11 @@ def train_loop(x, y, x_tk, y_tk, encoder, decoder, device, epochs, batch_size, l
     criterion = nn.NLLLoss()
 
     train_x, val_x, train_y, val_y = train_test_split(x, y, test_size=0.1, random_state=42)
+    val_x = torch.tensor(val_x, dtype=torch.long, device=device)
+    val_y = torch.tensor(val_y, dtype=torch.long, device=device)
+
+    pad_token = y_tk.word_index['<PAD>']
+    target_length = len(train_y[0])
 
     for epoch in range(epochs):
 
@@ -249,10 +263,12 @@ def train_loop(x, y, x_tk, y_tk, encoder, decoder, device, epochs, batch_size, l
             batch_x = torch.tensor(train_x[batch*batch_size: (batch+1)*batch_size], dtype=torch.long, device=device)
             batch_y = torch.tensor(train_y[batch*batch_size: (batch+1)*batch_size], dtype=torch.long, device=device)
 
-            loss = train(batch_x, batch_y, x_tk, y_tk, encoder, decoder, optimizer, criterion, device)
+            train_loss = train(batch_x, batch_y, encoder, decoder, optimizer, criterion, pad_token, target_length, device)
 
-            print (f'\repoch {epoch:3} batch {batch:5} training loss {loss:.4f}', end='')
-        print ('\n')
+            print (f'\repoch {epoch+1:3} training loss {train_loss:.4f}', end='')
+
+        valid_loss = validate(val_x, val_y, encoder, decoder, criterion, pad_token, target_length, device)
+        print (f'\repoch {epoch+1:3} training loss {train_loss:.4f} validation loss {valid_loss:.4f}')
 
 def main():
 
