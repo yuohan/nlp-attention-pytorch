@@ -141,9 +141,9 @@ class Decoder(nn.Module):
         self.output_size = output_size
 
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.gru = nn.GRU(hidden_size, hidden_size, batch_first=True)
+        self.gru = nn.GRU(hidden_size*2, hidden_size, batch_first=True)
         self.attention = attention
-        self.out = nn.Linear(hidden_size*2, output_size)
+        self.out = nn.Linear(hidden_size, output_size)
 
     def forward(self, input, hidden, encoder_outputs):
         """
@@ -159,18 +159,23 @@ class Decoder(nn.Module):
         hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
         score: tensor (batch_size, input_length)
         """
+        # get context vector
+        context, score = self.attention(hidden[0], encoder_outputs)
+
         # embedded (batch_size, 1, hidden_size)
         embedded = self.embedding(input)
+
+        # concat context and embedded
+        # (batch_size, 1, hidden_size*2)
+        concat = torch.cat((context.unsqueeze(1), embedded), dim=2)
+
         # output (batch_size, 1, hidden_size)
         # hidden (num_layers*num_directions, batch_size, hidden_size)
-        output, hidden = self.gru(embedded, hidden)
-
-        # get context vector
-        context, score = self.attention(hidden[-1], encoder_outputs)
+        output, hidden = self.gru(concat)
 
         #attentional hidden state
-        attn_hidden = torch.tanh(self.out(torch.cat((context, hidden[-1]), dim=1)))
-        output = F.log_softmax(attn_hidden, dim=1)
+        output = self.out(output)
+        output = F.log_softmax(output.squeeze(1), dim=1)
 
         return output, hidden, score
 
