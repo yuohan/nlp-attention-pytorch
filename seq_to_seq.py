@@ -219,7 +219,10 @@ class Seq2seq(nn.Module):
 
         self.input_size = input_size
         self.output_size = output_size
+        self.embedding_size = embedding_size
         self.hidden_size = hidden_size
+        self.attention_size = attention_size
+        self.attention_name = attention
 
         self.pad_token = pad_token
         self.device = device
@@ -250,3 +253,19 @@ class Seq2seq(nn.Module):
             attentions[i] = attention.squeeze(2)
 
         return decoder_outputs, attentions
+
+    def save(self, path, info=None):
+        
+        state = {
+            'state_dict': self.state_dict(),
+            'input_size': self.input_size,
+            'output_size': self.output_size,
+            'target_length': self.target_length,
+            'embedding_size': self.embedding_size,
+            'hidden_size': self.hidden_size,
+            'attention_size': self.attention_size,
+            'attention_name': self.attention_name
+        }
+        if info != None:
+            state = {**info, **state}
+        torch.save(state, path)

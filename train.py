@@ -10,91 +10,26 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from data import Corpus
 from seq_to_seq import Seq2seq
 
-class Tokenizer:
-
-    def __init__(self):
-
-        self.word_index = {'<PAD>': 0}
-        self.index_to_word = {0: '<PAD>'}
-        self.num_words = 2
-
-    def tokenize(self, x):
-        """ Tokenize x
-
-        Parameters
-        ----------
-        x: List of string
-        Input text list
-
-        Return
-        ----------
-        token_x: List of sequence(List)
-        Tokenized input x
-        """
-        token_x = []
-        for text in x:
-            token_text = []
-            for word in text.split(' '):
-                if word not in self.word_index:
-                    self.word_index[word] = self.num_words
-                    self.num_words += 1
-                token = self.word_index[word]
-                token_text.append(token)
-            token_x.append(token_text)
-        return token_x
-
-    def pad(self, x, length=None):
-        """ Pad x
-
-        Parameters
-        ----------
-        x: List of sequence(List)
-        Input sequence list
-        length: uint
-        Length to pad the sequence to. If None, use length of longest sequence in x.
-
-        Return
-        ------
-        pad_x: List of sequence(List)
-        Padded input x.
-        """
-        if length is None:
-            length = max([len(seq) for seq in x])
-        pad_token = self.word_index['<PAD>']
-        pad_x = []
-        for seq in x:
-            pad_seq = seq
-            if len(seq) < length:
-                pad_length = length - len(seq)
-                pad_seq = pad_seq + ([pad_token]*pad_length)
-            pad_x.append(pad_seq)
-        return pad_x
-
-def load_data(source_path, target_path):
+def load_data(filepath):
 
     # load data
-    with open(source_path, 'rt') as f:
-        source = f.read().split('\n')
+    with open(filepath, 'rt') as f:
+        data = f.read().split('\n')
 
-    with open(target_path, 'rt') as f:
-        target = f.read().split('\n')
+    return preprocess(data)
 
-    return source, target
-
-def preprocess(x, y):
+def preprocess(x):
 
     tokenizer_x = Tokenizer()
-    tokenizer_y = Tokenizer()
     # tokenize
     x = tokenizer_x.tokenize(x)
-    y = tokenizer_y.tokenize(y)
     # pad
     x = tokenizer_x.pad(x)
-    y = tokenizer_y.pad(y)
 
-    return x, y, tokenizer_x, tokenizer_y
+    return x, tokenizer_x
 
 def train(x, y, model, optimizer, criterion, target_length):
 
@@ -124,7 +59,7 @@ def validate(x, y, model, criterion, target_length):
 
 def train_loop(x, y, model, epochs, batch_size, learning_rate, device, path):
 
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.NLLLoss()
 
     train_x, val_x, train_y, val_y = train_test_split(x, y, test_size=0.1, random_state=42)
@@ -146,19 +81,13 @@ def train_loop(x, y, model, epochs, batch_size, learning_rate, device, path):
         valid_loss = validate(val_x, val_y, model, criterion, target_length)
         print (f'\repoch {epoch+1:3} training loss {train_loss:.4f} validation loss {valid_loss:.4f}')
 
-        state = {
-            'epoch': epoch,
-            'target_length': target_length,
-            'state_dict': model.state_dict()
-        }
-        torch.save(state, path)
+        model.save(path)
 
 def main(source, target, save_path, attention_name, epochs, 
         batch_size, embedding_size, hidden_size, attention_size, learning_rate):
 
-    source_data, target_data = load_data(source, target)
-
-    x, y, x_tk, y_tk = preprocess(source_data, target_data)
+    x, x_tk = load_data(source)
+    y, y_tk = load_data(target)
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pad_token = x_tk.word_index['<PAD>']
@@ -166,6 +95,8 @@ def main(source, target, save_path, attention_name, epochs,
     model = Seq2seq(x_tk.num_words, y_tk.num_words, embedding_size, hidden_size, attention_size, attention_name, pad_token, device).to(device)
 
     train_loop(x, y, model, epochs, batch_size, learning_rate, device, save_path)
+    x_tk.save('source_corpus.pkl')
+    y_tk.save('target_corpus.pkl')
     
 if __name__ == '__main__':
 
@@ -175,7 +106,7 @@ if __name__ == '__main__':
                     help='File path of source dataset')
     parser.add_argument('target', type=str,
                     help='File path of target dataset')
-    parser.add_argument('--save', type=str, default='model.pth.tar',
+    parser.add_argument('--save', type=str, default='model.pkl',
                     help='Model save path')
     parser.add_argument('--type', type=str, default='concat', ## [additive, dot, multiplicative, concat]
                     help='Attention score function')
