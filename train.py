@@ -1,11 +1,13 @@
 import re
 import io
 import math
+import argparse
 import unicodedata
 
 from sklearn.model_selection import train_test_split
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 
 from seq_to_seq import Seq2seq
@@ -70,13 +72,13 @@ class Tokenizer:
             pad_x.append(pad_seq)
         return pad_x
 
-def load_data(input, target):
+def load_data(source_path, target_path):
 
     # load data
-    with open(f'data/{input}', 'rt') as f:
+    with open(source_path, 'rt') as f:
         source = f.read().split('\n')
 
-    with open(f'data/{target}', 'rt') as f:
+    with open(target_path, 'rt') as f:
         target = f.read().split('\n')
 
     return source, target
@@ -120,7 +122,7 @@ def validate(x, y, model, criterion, target_length):
         
     return loss.item() / target_length
 
-def train_loop(x, y, model, epochs, batch_size, learning_rate, device):
+def train_loop(x, y, model, epochs, batch_size, learning_rate, device, path):
 
     optimizer = optim.SGD(model.parameters(), lr=learning_rate)
     criterion = nn.NLLLoss()
@@ -144,27 +146,52 @@ def train_loop(x, y, model, epochs, batch_size, learning_rate, device):
         valid_loss = validate(val_x, val_y, model, criterion, target_length)
         print (f'\repoch {epoch+1:3} training loss {train_loss:.4f} validation loss {valid_loss:.4f}')
 
-def main():
+        state = {
+            'epoch': epoch,
+            'target_length': target_length,
+            'state_dict': model.state_dict()
+        }
+        torch.save(state, path)
 
-    en, fr = load_data('en', 'fr')
+def main(source, target, save_path, attention_name, epochs, 
+        batch_size, embedding_size, hidden_size, attention_size, learning_rate):
 
-    x, y, x_tk, y_tk = preprocess(fr, en)
+    source_data, target_data = load_data(source, target)
+
+    x, y, x_tk, y_tk = preprocess(source_data, target_data)
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    epochs = 10
-    batch_size = 64
-    embedding_size = 256
-    hidden_size = 1024
-    attention_size = 10
-    learning_rate = 0.001
-
-    attention = 'additive'
-    # [additive, dot, multiplicative, concat]
     pad_token = x_tk.word_index['<PAD>']
 
-    model = Seq2seq(x_tk.num_words, y_tk.num_words, embedding_size, hidden_size, attention_size, attention, pad_token, device).to(device)
+    model = Seq2seq(x_tk.num_words, y_tk.num_words, embedding_size, hidden_size, attention_size, attention_name, pad_token, device).to(device)
 
-    train_loop(x, y, model, epochs, batch_size, learning_rate, device)
+    train_loop(x, y, model, epochs, batch_size, learning_rate, device, save_path)
     
 if __name__ == '__main__':
-    main()
+
+    parser = argparse.ArgumentParser(description='Train a Translator')
+
+    parser.add_argument('source', type=str,
+                    help='File path of source dataset')
+    parser.add_argument('target', type=str,
+                    help='File path of target dataset')
+    parser.add_argument('--save', type=str, default='model.pth.tar',
+                    help='Model save path')
+    parser.add_argument('--type', type=str, default='concat', ## [additive, dot, multiplicative, concat]
+                    help='Attention score function')
+    parser.add_argument('--epoch', type=int, default=20,
+                    help='Number of epochs')
+    parser.add_argument('--batch', type=int, default=64,
+                    help='Number of batch sizes')
+    parser.add_argument('--embed', type=int, default=256,
+                    help='Number of embedding dim both encoder and decoder')
+    parser.add_argument('--hidden', type=int, default=512,
+                    help='Number of features of hidden layer')
+    parser.add_argument('--attn', type=int, default=10,
+                    help='Number of features of attention')
+    parser.add_argument('--lr', type=float, default=0.001,
+                    help='Learning rate')
+
+    args = parser.parse_args()
+
+    main(args.source, args.target, args.save, args.type, args.epoch, args.batch, args.embed, args.hidden, args.attn, args.lr)
