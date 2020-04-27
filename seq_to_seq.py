@@ -10,7 +10,7 @@ class Encoder(nn.Module):
         self.embedding = nn.Embedding(input_size, embedding_size)
         self.gru = nn.GRU(embedding_size, hidden_size, batch_first=True)
 
-    def forward(self, input, hidden):
+    def forward(self, input_tensor, hidden):
         """
         Parameters
         ----------
@@ -22,113 +22,59 @@ class Encoder(nn.Module):
         output: tensor (batch_size, input_length, hidden_size)
         hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
         """
+        # (batch_size, input_length)
+        mask = input_tensor.eq(PAD_TOKEN)
+        input_lengths = input_tensor.size(1) - torch.sum(mask, dim=1)
+
         # embedded (batch_size, input_length, embedding_size)
-        embedded = self.embedding(input)
-        output, hidden = self.gru(embedded, hidden)
+        embedded = self.embedding(input_tensor)
+        packed = pack_padded_sequence(embedded, input_lengths, batch_first=True)
+        packed_output, hidden = self.gru(packed)
+        output, input_lengths = pad_packed_sequence(packed_output, batch_first=True)
 
-        return output, hidden
+        return output, hidden, mask
 
-class AdditiveAttention(nn.Module):
+class AttentionLayer(nn.Module):
 
-    def __init__(self, hidden_size, attention_size):
-        super(AdditiveAttention, self).__init__()
+    def __init__(self, score_func, hidden_size, attention_size):
+        super(AttentionLayer, self).__init__()
 
-        self.w1 = nn.Linear(hidden_size, attention_size)
-        self.w2 = nn.Linear(hidden_size, attention_size)
-        self.v = nn.Linear(attention_size, 1)
+        if score_func in ['add', 'additive']:
+            self.w1 = nn.Linear(hidden_size, attention_size)
+            self.w2 = nn.Linear(hidden_size, attention_size)
+            self.v = nn.Linear(attention_size, 1)
+            self.score = self.additive_score
 
-    def forward(self, decoder_hidden, encoder_outputs):
-        """
-        Parameters
-        ----------
-        decoder_hidden: tensor (batch_size, hidden_size)
-        encoder_outputs: tensor (batch_size, input_length, hidden_size)
+        elif score_func == 'dot':
+            self.score = self.dot_score
 
-        Return
-        ------
-        conext: tensor (batch_size, hidden_size)
-        score aligned: tensor (batch_size, input_length)
-        """
-        # calculate additive score
-        # output of w1: (batch_size, 1, attention_size)
-        # output of w2: (batch_size, input_length, attention_size)
-        # output of v: (batch_size, input_length, 1)
-        hidden = decoder_hidden.unsqueeze(1)
-        score = self.v(torch.tanh( self.w1(hidden) + self.w2(encoder_outputs) ))
-        # align (batch_size, input_length, 1)
-        align = F.softmax(score, dim=1)
-        # context vector (batch_size, hidden_size)
-        context = torch.mul(align, encoder_outputs)
-        context = torch.sum(context, dim=1)
-        return context, align
+        elif score_func in ['general', 'mul', 'multiplicative']:
+            self.w = nn.Linear(decoder_size, encoder_size)
+            self.score = self.general_scoe
 
-class DotAttention(nn.Module):
+        elif score_func == 'concat':
+            self.w = nn.Linear(hidden_size*2, attention_size)
+            self.v = nn.Linear(attention_size, 1)
+            self.score = self.concat_score
 
-    def __init__(self):
-        super(DotAttention, self).__init__()
-
-    def forward(self, decoder_hidden, encoder_outputs):
-        """
-        Parameters
-        ----------
-        decoder_hidden: tensor (batch_size, hidden_size)
-        encoder_outputs: tensor (batch_size, input_length, hidden_size)
-
-        Return
-        ------
-        conext: tensor (batch_size, hidden_size)
-        score aligned: tensor (batch_size, input_length)
-        """
-        # calculate dot score
-        # score (batch_size, input_length, 1)
-        hidden = decoder_hidden.unsqueeze(2)
-        score = torch.bmm(encoder_outputs, hidden)
-        # align (batch_size, input_length, 1)
-        align = F.softmax(score, dim=1)
-        # context vector (batch_size, hidden_size)
-        context = torch.mul(align, encoder_outputs)
-        context = torch.sum(context, dim=1)
-        return context, align
-
-class MultiplicativeAttention(nn.Module):
+    # query: tensor (batch_size, hidden_size)
+    # hidden state of decoder (previous or current)
+    # value: tensor (batch_size, input_length, hidden_size)
+    # hidden state of input sequences from encoder
+    def additive_score(self, query, value):
+        return self.v(torch.tanh(self.w1(query.unsqueeze(1)) + self.w2(value)))
     
-    def __init__(self, encoder_size, decoder_size):
-        super(MultiplicativeAttention, self).__init__()
+    def dot_score(self, query, value):
+        return torch.bmm(value, query.unsqueeze(2))
 
-        self.w = nn.Linear(decoder_size, encoder_size)
+    def general_score(self, query, value):
+        return torch.bmm(value, self.w(query).unsqueeze(2))
 
-    def forward(self, decoder_hidden, encoder_outputs):
-        """
-        Parameters
-        ----------
-        decoder_hidden: tensor (batch_size, decoder_size)
-        encoder_outputs: tensor (batch_size, input_length, encoder_size)
+    def concat_score(self, query, value)
+        query = query.unsqueeze(1).expand(-1, value.size(1), -1)
+        return self.v(torch.tanh(self.w(torch.cat((query, value),dim=2))))
 
-        Return
-        ------
-        conext: tensor (batch_size, encoder_size)
-        score aligned: tensor (batch_size, input_length)
-        """
-        # calculate multiplicative (general in paper) score
-        # output of w: (batch_size, encoder_size, 1)
-        # score (batch_size, input_length, 1)
-        score = torch.bmm(encoder_outputs, self.w(decoder_hidden).unsqueeze(2))
-        # align (batch_size, input_length, 1)
-        align = F.softmax(score, dim=1)
-        # context vector (batch_size, hidden_size)
-        context = torch.mul(align, encoder_outputs)
-        context = torch.sum(context, dim=1)
-        return context, align
-
-class ConcatAttention(nn.Module):
-
-    def __init__(self, hidden_size, attention_size):
-        super(ConcatAttention, self).__init__()
-
-        self.w = nn.Linear(hidden_size*2, attention_size)
-        self.v = nn.Linear(attention_size, 1)
-
-    def forward(self, decoder_hidden, encoder_outputs):
+    def forward(self, decoder_hidden, encoder_outputs, encoder_mask=None):
         """
         Parameters
         ----------
@@ -140,11 +86,11 @@ class ConcatAttention(nn.Module):
         conext: tensor (batch_size, hidden_size)
         score aligned: tensor (batch_size, input_length)
         """
-        # calculate concat score
-        # output of w: (batch_size, input_length, attention_size)
-        # output of v: (batch_size, input_length, 1)
-        hidden = decoder_hidden.unsqueeze(1).expand(-1, encoder_outputs.size(1), -1)
-        score = self.v(torch.tanh(self.w(torch.cat((hidden, encoder_outputs),dim=2))))
+        # calculate attention score
+        score = self.score(decoder_hidden, encoder_outputs)
+        # don't attend over padding
+        if encoder_mask is not None:
+            score = score.masked_fill_(encoder_mask.unsqueeze(2), float('-inf'))
         # align (batch_size, input_length, 1)
         align = F.softmax(score, dim=1)
         # context vector (batch_size, hidden_size)

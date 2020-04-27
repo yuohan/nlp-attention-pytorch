@@ -60,7 +60,7 @@ def validate(x, y, model, criterion, target_length):
 def train_loop(x, y, model, epochs, batch_size, learning_rate, device, path):
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.NLLLoss()
+    criterion = nn.NLLLoss(ignore_index=0)
 
     train_x, val_x, train_y, val_y = train_test_split(x, y, test_size=0.1, random_state=42)
     val_x = torch.tensor(val_x, dtype=torch.long, device=device)
