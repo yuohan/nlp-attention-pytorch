@@ -1,0 +1,11 @@
+epochs: 10
+batch_size: 32
+learning_rate: 0.01
+attn_name: additive
+hidden_size: 512
+embed_size: 256
+attn_size: 16
+data_path: ./input
+input_lang_name: en
+target_lang_name: fr
+save_path: ./output

@@ -1,4 +1,5 @@
 import re
+import yaml
 import argparse
 import unicodedata
 import torch
@@ -32,7 +33,7 @@ def translate(model, input_data, target_lang, max_length, device):
 
     return predicted_words, attention.cpu().numpy()
 
-def main(text, model_path, input_path, target_path):
+def main(text, model_path, input_lang_path, target_lang_path):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
@@ -40,11 +41,11 @@ def main(text, model_path, input_path, target_path):
     model = load_model(model_path, device)
 
     # load tokenizer
-    input_lang = Tokenizer('')
-    input_lang.load(input_path)
+    input_lang = Tokenizer(None)
+    input_lang.load(input_lang_path)
 
-    target_lang = Tokenizer('')
-    target_lang.load(target_path)
+    target_lang = Tokenizer(None)
+    target_lang.load(target_lang_path)
 
     input_data = input_lang.to_token([preprocess(text)])
 
@@ -61,11 +62,9 @@ if __name__ == '__main__':
 
     parser.add_argument('text', type=str,
                     help='Text to be translated')
-    parser.add_argument('--model', type=str, default='model.pth',
-                    help='Pretrained model path')
-    parser.add_argument('--source', type=str, default='source.pkl',
-                    help='Source corpus path')
-    parser.add_argument('--target', type=str, default='target.pkl',
-                    help='Targer corpus path')
+    parser.add_argument('--config', type=str, default='configs/translate_config.yaml',
+                    help='Configuration file path')
+
     args = parser.parse_args()
-    main(args.text, args.model, args.source, args.target)
+    kwargs = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
+    main(args.text, **kwargs)

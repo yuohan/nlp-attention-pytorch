@@ -2,6 +2,7 @@ import re
 import io
 import time
 import math
+import yaml
 import random
 import argparse
 import unicodedata
@@ -10,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from tokenizer import Tokenizer
+from tokenizer import Tokenizer, PAD_TOKEN
 from seq2seq import Seq2seq
 
 def load_data(data_path, input_name, target_name, encoding='utf-8'):
@@ -134,47 +135,27 @@ def train_loop(pairs, model, epochs, batch_size, learning_rate, device, print_ev
                 print_log(start, now, batch_loss_avg, idx, steps_per_epoch)
         print()
 
-def main(path, source, target, save_path, attn_name, epochs, 
-        batch_size, embed_size, hidden_size, attn_size, learning_rate):
+def main(data_path, input_lang_name, target_lang_name, save_path,
+        epochs, batch_size, learning_rate, attn_name, attn_size, hidden_size, embed_size):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    input_lang, target_lang, pairs = load_data(path, source, target)
+    input_lang, target_lang, pairs = load_data(data_path, input_lang_name, target_lang_name)
 
     model = Seq2seq(input_lang.num_words, target_lang.num_words, embed_size, hidden_size, attn_size, attn_name, device)
     train_loop(pairs, model, epochs, batch_size, learning_rate, device)
 
     model.save(f'{save_path}/model.pth')
-    input_lang.save(f'{save_path}/{source}.pkl')
-    target_lang.save(f'{save_path}/{target}.pkl')
+    input_lang.save(f'{save_path}/{input_lang_name}.pkl')
+    target_lang.save(f'{save_path}/{target_lang_name}.pkl')
     
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Train a Translator')
 
-    parser.add_argument('path', type=str,
-                    help='Path of input data directory')
-    parser.add_argument('input', type=str,
-                    help='Input language name')
-    parser.add_argument('target', type=str,
-                    help='Target language name')
-    parser.add_argument('--save', type=str, default='model.pkl',
-                    help='Save path directory')
-    parser.add_argument('--type', type=str, default='concat', ## [additive, dot, general, concat]
-                    help='Attention score function')
-    parser.add_argument('--epoch', type=int, default=20,
-                    help='Number of epochs')
-    parser.add_argument('--batch', type=int, default=64,
-                    help='Number of batch sizes')
-    parser.add_argument('--embed', type=int, default=256,
-                    help='Number of embedding dim both encoder and decoder')
-    parser.add_argument('--hidden', type=int, default=512,
-                    help='Number of features of hidden layer')
-    parser.add_argument('--attn', type=int, default=10,
-                    help='Number of features of attention')
-    parser.add_argument('--lr', type=float, default=0.001,
-                    help='Learning rate')
+    parser.add_argument('--config', type=str, default='configs/train_config.yaml',
+                    help='Configuration file path')
 
     args = parser.parse_args()
-
-    main(args.path, args.input, args.target, args.save, args.type, args.epoch, args.batch, args.embed, args.hidden, args.attn, args.lr)
+    kwargs = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
+    main(**kwargs)
