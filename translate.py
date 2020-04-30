@@ -3,6 +3,8 @@ import yaml
 import argparse
 import unicodedata
 import torch
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 from tokenizer import Tokenizer
 from seq2seq import Seq2seq, load_model
@@ -33,7 +35,7 @@ def translate(model, input_data, target_lang, max_length, device):
 
     return predicted_words, attention.cpu().numpy()
 
-def main(text, model_path, input_lang_path, target_lang_path):
+def main(text, model_path, input_lang_path, target_lang_path, show_attention=False):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
@@ -49,12 +51,23 @@ def main(text, model_path, input_lang_path, target_lang_path):
 
     input_data = input_lang.to_token([preprocess(text)])
 
-    result, _ = translate(model, input_data, target_lang, target_lang.max_len, device)
+    result, attention = translate(model, input_data, target_lang, target_lang.max_len, device)
 
     print ('Input text:')
     print (text)
     print ('Translated text:')
     print (result[0])
+
+    if show_attention:
+        xticklabels = text.split(' ') + ['<EOS>']
+        yticklabels = result[0].split(' ') + ['<EOS>']
+        attention = attention[:len(yticklabels)][:len(xticklabels)]
+        ax = sns.heatmap(attention, cmap=sns.light_palette("orange", as_cmap=True))
+        ax.set_xticklabels(xticklabels, rotation='horizontal')
+        ax.set_yticklabels(yticklabels, rotation='horizontal')
+        ax.xaxis.set_ticks_position('top')
+        plt.show()
+
     
 if __name__ == '__main__':
 
@@ -64,7 +77,9 @@ if __name__ == '__main__':
                     help='Text to be translated')
     parser.add_argument('--config', type=str, default='configs/translate_config.yaml',
                     help='Configuration file path')
+    parser.add_argument('--show-attention', action='store_true',
+                    help='Plot attention')
 
     args = parser.parse_args()
     kwargs = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
-    main(args.text, **kwargs)
+    main(args.text, **kwargs, show_attention=args.show_attention)
