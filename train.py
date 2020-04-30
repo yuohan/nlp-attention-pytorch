@@ -1,114 +1,166 @@
 import re
 import io
+import time
 import math
+import random
 import argparse
 import unicodedata
-
-from sklearn.model_selection import train_test_split
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from data import Corpus
-from seq_to_seq import Seq2seq
+from tokenizer import Tokenizer
+from seq2seq import Seq2seq
 
-def load_data(filepath):
+def load_data(data_path, input_name, target_name, encoding='utf-8'):
+
+    input_lang = Tokenizer(input_name)
+    target_lang = Tokenizer(target_name)
 
     # load data
-    with open(filepath, 'rt') as f:
-        data = f.read().split('\n')
+    with io.open(f'{data_path}/{input_name}', encoding=encoding) as f:
+        input_data = f.read().strip().split('\n')
 
-    return preprocess(data)
+    with io.open(f'{data_path}/{target_name}', encoding=encoding) as f:
+        target_data = f.read().strip().split('\n')
 
-def preprocess(x):
+    input_data = [preprocess(s) for s in input_data]
+    target_data = [preprocess(s) for s in target_data]
 
-    tokenizer_x = Tokenizer()
-    # tokenize
-    x = tokenizer_x.tokenize(x)
-    # pad
-    x = tokenizer_x.pad(x)
+    input_data = input_lang.to_token(input_data)
+    target_data = target_lang.to_token(target_data)
 
-    return x, tokenizer_x
+    return input_lang, target_lang, list(zip(input_data, target_data))
 
-def train(x, y, model, optimizer, criterion, target_length):
+def preprocess(s):
+    # Turn a Unicode string to plain ASCII, thanks to
+    # http://stackoverflow.com/a/518232/2809427
+    def unicodeToAscii(s):
+        return ''.join(
+            c for c in unicodedata.normalize('NFD', s)
+            if unicodedata.category(c) != 'Mn'
+        )
+    # Lowercase, trim, and remove non-letter characters 
+    s = unicodeToAscii(s.lower().strip())
+    s = re.sub(r'([.!?])', r' \1', s)
+    s = re.sub(r'[^a-zA-Z.!?]+', r' ', s)
+    return s
 
-    # x: tensor(batch_size, input_length)
+def pad_sequence(x):
+    
+    length = max([len(seq) for seq in x])
+    pad_x = []
+    for seq in x:
+        pad_seq = seq
+        if len(seq) < length:
+            pad_length = length - len(seq)
+            pad_seq = pad_seq + ([PAD_TOKEN]*pad_length)
+        pad_x.append(pad_seq)
+    return pad_x
+
+def generate_batch(pairs, batch_size, device, shuffle=True):
+    
+    if shuffle:
+        random.shuffle(pairs)
+
+    steps_per_epoch = math.ceil(len(pairs)/batch_size)
+    for idx in range(1, steps_per_epoch+1):
+        x = []
+        y = []
+        for pair in pairs[(idx-1)*batch_size:idx*batch_size]:
+            x.append(pair[0])
+            y.append(pair[1])
+            
+        # sort by length (descending)
+        sorted_pairs = sorted(zip(x, y), key=lambda p: len(p[0]), reverse=True)
+        sorted_x, sorted_y = zip(*sorted_pairs)
+        # pad
+        padded_x = pad_sequence(sorted_x)
+        padded_y = pad_sequence(sorted_y)
+        # array to tensor
+        input_tensor = torch.tensor(padded_x, dtype=torch.long, device=device)
+        target_tensor = torch.tensor(padded_y, dtype=torch.long, device=device)
+        yield input_tensor, target_tensor, idx, steps_per_epoch
+
+def train(input_tensor, target_tensor, model, optimizer, criterion):
+
+    target_length = target_tensor.size(1)
 
     optimizer.zero_grad()
-    outputs, _ = model(x, target_length)
-    
+    outputs, _ = model(input_tensor, target_length)
+
     loss = 0
     for i in range(target_length):
-        loss += criterion(outputs[i], y[:,i])
+        loss += criterion(outputs[i], target_tensor[:,i])
     loss.backward()
     optimizer.step()
 
     return loss.item() / target_length
 
-def validate(x, y, model, criterion, target_length):
+def as_minute(s):
+    m = math.floor(s / 60)
+    s -= m * 60
+    return f'{m:2}m {int(s):2}s'
 
-    with torch.no_grad():
-        outputs, _ = model(x, target_length)
+def print_log(start, now, loss, cur_step, total_step):
 
-        loss = 0
-        for i in range(target_length):
-            loss += criterion(outputs[i], y[:,i])
-        
-    return loss.item() / target_length
+    s = now - start
+    es = s / (cur_step/total_step)
+    rs = es - s
 
-def train_loop(x, y, model, epochs, batch_size, learning_rate, device, path):
+    print(f'\r{as_minute(s)} (-{as_minute(rs)}({cur_step}/{total_step}) {loss:.4f}', end='')
 
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.NLLLoss(ignore_index=0)
+def train_loop(pairs, model, epochs, batch_size, learning_rate, device, print_every=5.0):
 
-    train_x, val_x, train_y, val_y = train_test_split(x, y, test_size=0.1, random_state=42)
-    val_x = torch.tensor(val_x, dtype=torch.long, device=device)
-    val_y = torch.tensor(val_y, dtype=torch.long, device=device)
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+    criterion = torch.nn.NLLLoss(ignore_index=PAD_TOKEN)
 
-    target_length = len(train_y[0])
+    for epoch in range(1, epochs+1):
 
-    for epoch in range(epochs):
+        print (f'epoch: {epoch}/{epochs}')
 
-        for batch in range(math.ceil(len(train_x) / batch_size)):
-            batch_x = torch.tensor(train_x[batch*batch_size: (batch+1)*batch_size], dtype=torch.long, device=device)
-            batch_y = torch.tensor(train_y[batch*batch_size: (batch+1)*batch_size], dtype=torch.long, device=device)
+        batch_loss_total = 0
+        start = time.time()
+        last = start
+        for input_tensor, target_tensor, idx, steps_per_epoch in generate_batch(pairs, batch_size, device):
+            loss = train(input_tensor, target_tensor, model, optimizer, criterion)
+            batch_loss_total += loss
 
-            train_loss = train(batch_x, batch_y, model, optimizer, criterion, target_length)
+            now = time.time()
+            if (now - last) > print_every or idx == steps_per_epoch:
+                last = now
+                batch_loss_avg = batch_loss_total / idx
+                print_log(start, now, batch_loss_avg, idx, steps_per_epoch)
+        print()
 
-            print (f'\repoch {epoch+1:3} training loss {train_loss:.4f}', end='')
+def main(path, source, target, save_path, attn_name, epochs, 
+        batch_size, embed_size, hidden_size, attn_size, learning_rate):
 
-        valid_loss = validate(val_x, val_y, model, criterion, target_length)
-        print (f'\repoch {epoch+1:3} training loss {train_loss:.4f} validation loss {valid_loss:.4f}')
-
-        model.save(path)
-
-def main(source, target, save_path, attention_name, epochs, 
-        batch_size, embedding_size, hidden_size, attention_size, learning_rate):
-
-    x, x_tk = load_data(source)
-    y, y_tk = load_data(target)
-    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    pad_token = x_tk.word_index['<PAD>']
+    
+    input_lang, target_lang, pairs = load_data(path, source, target)
 
-    model = Seq2seq(x_tk.num_words, y_tk.num_words, embedding_size, hidden_size, attention_size, attention_name, pad_token, device).to(device)
+    model = Seq2seq(input_lang.num_words, target_lang.num_words, embed_size, hidden_size, attn_size, attn_name, device)
+    train_loop(pairs, model, epochs, batch_size, learning_rate, device)
 
-    train_loop(x, y, model, epochs, batch_size, learning_rate, device, save_path)
-    x_tk.save('source_corpus.pkl')
-    y_tk.save('target_corpus.pkl')
+    model.save(f'{save_path}/model.pth')
+    input_lang.save(f'{save_path}/{source}.pkl')
+    target_lang.save(f'{save_path}/{target}.pkl')
     
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Train a Translator')
 
-    parser.add_argument('source', type=str,
-                    help='File path of source dataset')
+    parser.add_argument('path', type=str,
+                    help='Path of input data directory')
+    parser.add_argument('input', type=str,
+                    help='Input language name')
     parser.add_argument('target', type=str,
-                    help='File path of target dataset')
+                    help='Target language name')
     parser.add_argument('--save', type=str, default='model.pkl',
-                    help='Model save path')
-    parser.add_argument('--type', type=str, default='concat', ## [additive, dot, multiplicative, concat]
+                    help='Save path directory')
+    parser.add_argument('--type', type=str, default='concat', ## [additive, dot, general, concat]
                     help='Attention score function')
     parser.add_argument('--epoch', type=int, default=20,
                     help='Number of epochs')
@@ -125,4 +177,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    main(args.source, args.target, args.save, args.type, args.epoch, args.batch, args.embed, args.hidden, args.attn, args.lr)
+    main(args.path, args.input, args.target, args.save, args.type, args.epoch, args.batch, args.embed, args.hidden, args.attn, args.lr)

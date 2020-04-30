@@ -1,16 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
+
+from tokenizer import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 
 class Encoder(nn.Module):
 
-    def __init__(self, input_size, embedding_size, hidden_size):
+    def __init__(self, input_size, embed_size, hidden_size):
         super(Encoder, self).__init__()
+        
+        self.embedding = nn.Embedding(input_size, embed_size)
+        self.gru = nn.GRU(embed_size, hidden_size, batch_first=True)
 
-        self.embedding = nn.Embedding(input_size, embedding_size)
-        self.gru = nn.GRU(embedding_size, hidden_size, batch_first=True)
-
-    def forward(self, input_tensor, hidden):
+    def forward(self, input_tensor):
         """
         Parameters
         ----------
@@ -26,7 +29,7 @@ class Encoder(nn.Module):
         mask = input_tensor.eq(PAD_TOKEN)
         input_lengths = input_tensor.size(1) - torch.sum(mask, dim=1)
 
-        # embedded (batch_size, input_length, embedding_size)
+        # embedded (batch_size, input_length, embed_size)
         embedded = self.embedding(input_tensor)
         packed = pack_padded_sequence(embedded, input_lengths, batch_first=True)
         packed_output, hidden = self.gru(packed)
@@ -36,26 +39,29 @@ class Encoder(nn.Module):
 
 class AttentionLayer(nn.Module):
 
-    def __init__(self, score_func, hidden_size, attention_size):
+    def __init__(self, score_func, hidden_size, attn_size):
         super(AttentionLayer, self).__init__()
 
         if score_func in ['add', 'additive']:
-            self.w1 = nn.Linear(hidden_size, attention_size)
-            self.w2 = nn.Linear(hidden_size, attention_size)
-            self.v = nn.Linear(attention_size, 1)
+            self.w1 = nn.Linear(hidden_size, attn_size)
+            self.w2 = nn.Linear(hidden_size, attn_size)
+            self.v = nn.Linear(attn_size, 1)
             self.score = self.additive_score
 
         elif score_func == 'dot':
             self.score = self.dot_score
 
         elif score_func in ['general', 'mul', 'multiplicative']:
-            self.w = nn.Linear(decoder_size, encoder_size)
-            self.score = self.general_scoe
+            self.w = nn.Linear(hidden_size, hidden_size)
+            self.score = self.general_score
 
         elif score_func == 'concat':
-            self.w = nn.Linear(hidden_size*2, attention_size)
-            self.v = nn.Linear(attention_size, 1)
+            self.w = nn.Linear(hidden_size*2, attn_size)
+            self.v = nn.Linear(attn_size, 1)
             self.score = self.concat_score
+
+        else:
+            raise NotImplemented()
 
     # query: tensor (batch_size, hidden_size)
     # hidden state of decoder (previous or current)
@@ -70,7 +76,7 @@ class AttentionLayer(nn.Module):
     def general_score(self, query, value):
         return torch.bmm(value, self.w(query).unsqueeze(2))
 
-    def concat_score(self, query, value)
+    def concat_score(self, query, value):
         query = query.unsqueeze(1).expand(-1, value.size(1), -1)
         return self.v(torch.tanh(self.w(torch.cat((query, value),dim=2))))
 
@@ -100,15 +106,15 @@ class AttentionLayer(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, embedding_size, hidden_size, output_size, attention):
+    def __init__(self, output_size, embed_size, hidden_size, attn_size, attn_name):
         super(Decoder, self).__init__()
 
-        self.embedding = nn.Embedding(output_size, embedding_size)
-        self.gru = nn.GRU(embedding_size+hidden_size, hidden_size, batch_first=True)
-        self.attention = attention
+        self.embedding = nn.Embedding(output_size, embed_size)
+        self.gru = nn.GRU(embed_size+hidden_size, hidden_size, batch_first=True)
+        self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
         self.out = nn.Linear(hidden_size, output_size)
 
-    def forward(self, input, hidden, encoder_outputs):
+    def forward(self, input, hidden, encoder_outputs, encoder_mask):
         """
         Parameters
         ----------
@@ -123,13 +129,13 @@ class Decoder(nn.Module):
         score: tensor (batch_size, input_length)
         """
         # get context vector
-        context, score = self.attention(hidden[-1], encoder_outputs)
+        context, score = self.attention(hidden[-1], encoder_outputs, encoder_mask)
 
-        # embedded (batch_size, 1, embedding_size)
+        # embedded (batch_size, 1, embed_size)
         embedded = self.embedding(input)
 
         # concat context and embedded
-        # (batch_size, 1, hidden_size+embedding_size)
+        # (batch_size, 1, hidden_size+embed_size)
         concat = torch.cat((context.unsqueeze(1), embedded), dim=2)
 
         # output (batch_size, 1, hidden_size)
@@ -144,34 +150,21 @@ class Decoder(nn.Module):
 
 class Seq2seq(nn.Module):
 
-    def __init__(self, input_size, output_size, embedding_size, hidden_size, 
-                 attention_size, attention, pad_token, device):
-
+    def __init__(self, input_size, output_size, embed_size, hidden_size, 
+                 attn_size, attn_name, device):
         super(Seq2seq, self).__init__()
-
-        if attention == 'additive':
-            self.attention = AdditiveAttention(hidden_size, attention_size)
-        elif attention == 'dot':
-            self.attention = DotAttention()
-        elif attention == 'multiplicative' or attention == 'general':
-            self.attention = MultiplicativeAttention(hidden_size, hidden_size)
-        elif attention == 'concat':
-            self.attention = ConcatAttention(hidden_size, attention_size)
-        else:
-            raise NotImplemented()
-
-        self.encoder = Encoder(input_size, embedding_size, hidden_size)
-        self.decoder = Decoder(embedding_size, hidden_size, output_size, self.attention)
 
         self.input_size = input_size
         self.output_size = output_size
-        self.embedding_size = embedding_size
+        self.embed_size = embed_size
         self.hidden_size = hidden_size
-        self.attention_size = attention_size
-        self.attention_name = attention
+        self.attn_size = attn_size
+        self.attn_name = attn_name
 
-        self.pad_token = pad_token
         self.device = device
+
+        self.encoder = Encoder(input_size, embed_size, hidden_size).to(device)
+        self.decoder = Decoder(output_size, embed_size, hidden_size, attn_size, attn_name).to(device)
 
     def forward(self, x, target_length):
 
@@ -179,26 +172,27 @@ class Seq2seq(nn.Module):
         input_length = x.size(1)
 
         # encoder
-        encoder_hidden = torch.zeros(1, batch_size, self.hidden_size, device=self.device)
-        encoder_outputs, encoder_hidden = self.encoder(x, encoder_hidden)
+        encoder_outputs, encoder_hidden, encoder_mask = self.encoder(x)
 
         # decoder
-        decoder_outputs = torch.zeros(target_length, batch_size, self.output_size, device=self.device)
-        attentions = torch.zeros(target_length, batch_size, input_length)
+        decoder_outputs = []
+        attentions = []
 
-        decoder_input = torch.tensor(self.pad_token, dtype=torch.long, device=self.device).expand(batch_size, 1)
+        decoder_input = torch.tensor(SOS_TOKEN, dtype=torch.long, device=self.device).expand(batch_size, 1)
         decoder_hidden = encoder_hidden
 
         for i in range(target_length):
-            decoder_output, decoder_hidden, attention = self.decoder(decoder_input, decoder_hidden, encoder_outputs)
+            decoder_output, decoder_hidden, attention = \
+                self.decoder(decoder_input, decoder_hidden, encoder_outputs, encoder_mask)
 
             topv, topi = decoder_output.topk(1, dim=1)
             decoder_input = topi.detach()
-            
-            decoder_outputs[i] = decoder_output
-            attentions[i] = attention.squeeze(2)
 
-        return decoder_outputs, attentions
+            decoder_outputs.append(decoder_output)
+            attentions.append(attention.squeeze())
+
+        #(target_length, batch_size, output_size), (target_length, batch_size, input_length)
+        return torch.stack(decoder_outputs, dim=0), torch.stack(attentions, dim=0)
 
     def save(self, path, info=None):
         
@@ -206,12 +200,27 @@ class Seq2seq(nn.Module):
             'state_dict': self.state_dict(),
             'input_size': self.input_size,
             'output_size': self.output_size,
-            'target_length': self.target_length,
-            'embedding_size': self.embedding_size,
+            'embedding_size': self.embed_size,
             'hidden_size': self.hidden_size,
-            'attention_size': self.attention_size,
-            'attention_name': self.attention_name
+            'attention_size': self.attn_size,
+            'attention_name': self.attn_name
         }
         if info != None:
             state = {**info, **state}
         torch.save(state, path)
+
+def load_model(state_path, device):
+
+    state = torch.load(state_path, map_location=device)
+
+    attn_name = state['attention_name']
+    attn_size = state['attention_size']
+    embed_size = state['embedding_size']
+    hidden_size = state['hidden_size']
+    input_size = state['input_size']
+    output_size = state['output_size']
+
+    model = Seq2seq(input_size, output_size, embed_size, hidden_size, attn_size, attn_name, device)
+    model.load_state_dict(state['state_dict'])
+
+    return model

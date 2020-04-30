@@ -1,49 +1,59 @@
+import re
 import argparse
+import unicodedata
 import torch
 
-from data import Corpus
-from seq_to_seq import Seq2seq
+from tokenizer import Tokenizer
+from seq2seq import Seq2seq, load_model
 
-def translate(x):
-    
-    x = torch.tensor(x, dtype=torch.long).view(1,-1)
+def preprocess(s):
+    # Turn a Unicode string to plain ASCII, thanks to
+    # http://stackoverflow.com/a/518232/2809427
+    def unicodeToAscii(s):
+        return ''.join(
+            c for c in unicodedata.normalize('NFD', s)
+            if unicodedata.category(c) != 'Mn'
+        )
+    # Lowercase, trim, and remove non-letter characters 
+    s = unicodeToAscii(s.lower().strip())
+    s = re.sub(r'([.!?])', r' \1', s)
+    s = re.sub(r'[^a-zA-Z.!?]+', r' ', s)
+    return s
+
+def translate(model, input_data, target_lang, max_length, device):
+
     with torch.no_grad():
-        outputs, attentions = model(x)
+        input_tensor = torch.tensor(input_data, dtype=torch.long, device=device).view(1,-1)
+        input_length = input_tensor.size(1)
 
-    topv, topi = outputs.topk(1, dim=2)
-    return topi.squeeze().tolist()
+        output, attention = model(input_tensor, max_length)
+        topv, topi = output.topk(1, dim=2)
+        predicted_words = target_lang.to_text([topi.squeeze().tolist()])
 
-def main(text, model_path, source_path, target_path):
+    return predicted_words, attention.cpu().numpy()
 
+def main(text, model_path, input_path, target_path):
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
     # load model
-    state = torch.load(model_path, map_location=torch.device('cpu'))
-    attention_name = state['attention_name']
-    attention_size = state['attention_size']
-    embedding_size = state['embedding_size']
-    hidden_size = state['hidden_size']
-    input_size = state['input_size']
-    output_size = state['output_size']
-    target_length = state['target_length']
+    model = load_model(model_path, device)
 
-    model = Seq2seq(input_size, output_size, target_length, embedding_size, hidden_size, attention_size, attention_name, 0, 'cpu')
-    model.load_state_dict(state['state_dict'])
+    # load tokenizer
+    input_lang = Tokenizer('')
+    input_lang.load(input_path)
 
-    # load corpus
-    source_corpus = Corpus()
-    source_corpus.load(source_path)
+    target_lang = Tokenizer('')
+    target_lang.load(target_path)
 
-    target_corpus = Corpus()
-    target_corpus.load(target_path)
+    input_data = input_lang.to_token([preprocess(text)])
 
-    x = source_corpus.tokenize([text])
-
-    result = translate(x)
-    pred_text = ' '.join(en_tk.index_to_word[tk] for tk in tesult)
+    result, _ = translate(model, input_data, target_lang, target_lang.max_len, device)
 
     print ('Input text:')
     print (text)
     print ('Translated text:')
-    print (pred_text)
+    print (result[0])
     
 if __name__ == '__main__':
 
