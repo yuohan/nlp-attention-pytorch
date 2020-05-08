@@ -68,17 +68,17 @@ class AttentionLayer(nn.Module):
     # value: tensor (batch_size, input_length, hidden_size)
     # hidden state of input sequences from encoder
     def additive_score(self, query, value):
-        return self.v(torch.tanh(self.w1(query.unsqueeze(1)) + self.w2(value)))
+        return self.v(torch.tanh(self.w1(query.unsqueeze(1)) + self.w2(value))).squeeze(2)
     
     def dot_score(self, query, value):
-        return torch.bmm(value, query.unsqueeze(2))
+        return torch.bmm(query.unsqueeze(1), value.transpose(1,2)).squeeze(1)
 
     def general_score(self, query, value):
-        return torch.bmm(value, self.w(query).unsqueeze(2))
+        return torch.bmm(value, self.w(query).unsqueeze(2)).squeeze(2)
 
     def concat_score(self, query, value):
         query = query.unsqueeze(1).expand(-1, value.size(1), -1)
-        return self.v(torch.tanh(self.w(torch.cat((query, value),dim=2))))
+        return self.v(torch.tanh(self.w(torch.cat((query, value),dim=2)))).squeeze(2)
 
     def forward(self, decoder_hidden, encoder_outputs, encoder_mask=None):
         """
@@ -96,18 +96,19 @@ class AttentionLayer(nn.Module):
         score = self.score(decoder_hidden, encoder_outputs)
         # don't attend over padding
         if encoder_mask is not None:
-            score = score.masked_fill_(encoder_mask.unsqueeze(2), float('-inf'))
-        # align (batch_size, input_length, 1)
+            score = score.masked_fill_(encoder_mask, float('-inf'))
+        # align (batch_size, input_length)
         align = F.softmax(score, dim=1)
         # context vector (batch_size, hidden_size)
-        context = torch.mul(align, encoder_outputs)
+        context = torch.mul(align.unsqueeze(2), encoder_outputs)
         context = torch.sum(context, dim=1)
         return context, align
 
-class Decoder(nn.Module):
-
+class BahdanauDecoder(nn.Module):
+    """ Bahdanau-style decoder
+    """
     def __init__(self, output_size, embed_size, hidden_size, attn_size, attn_name):
-        super(Decoder, self).__init__()
+        super(BahdanauDecoder, self).__init__()
 
         self.embedding = nn.Embedding(output_size, embed_size)
         self.gru = nn.GRU(embed_size+hidden_size, hidden_size, batch_first=True)
@@ -148,6 +149,49 @@ class Decoder(nn.Module):
 
         return output, hidden, score
 
+class LuongDecoder(nn.Module):
+    """ Luong-style decoder
+    """
+    def __init__(self, output_size, embed_size, hidden_size, attn_size, attn_name):
+        super(LuongDecoder, self).__init__()
+
+        self.embedding = nn.Embedding(output_size, embed_size)
+        self.gru = nn.GRU(embed_size, hidden_size)
+        self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
+        self.concat = nn.Linear(hidden_size*2, hidden_size)
+        self.out = nn.Linear(hidden_size, output_size)
+
+    def forward(self, input, hidden, encoder_outputs, encoder_mask):
+        """
+        Parameters
+        ----------
+        input: tensor (seq_length(1), batch_size)
+        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        encoder_outputs: tensor (input_length, batch_size, hidden_size)
+
+        Return
+        ------
+        output: tensor (batch_size, hidden_size)
+        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        score: tensor (input_length, batch_size)
+        """
+        # embedded (1, batch_size, embed_size)
+        embedded = self.embedding(input)
+
+        # rnn_output (1, batch_size, hidden_size)
+        rnn_output, hidden = self.gru(embedded, hidden)
+
+        # get context vector
+        context, score = self.attention(hidden[-1], encoder_outputs, encoder_mask)
+
+        # concat_output (batch_size, hidden_size)
+        concat_output = torch.tanh(self.concat(torch.cat((rnn_output.squeeze(0), context.squeeze(1)), 1)))
+
+        # output (batch_size, hidden_size)
+        output = F.log_softmax(self.out(concat_output), dim=1)
+
+        return output, hidden, score 
+
 class Seq2seq(nn.Module):
 
     def __init__(self, input_size, output_size, embed_size, hidden_size, 
@@ -164,7 +208,7 @@ class Seq2seq(nn.Module):
         self.device = device
 
         self.encoder = Encoder(input_size, embed_size, hidden_size).to(device)
-        self.decoder = Decoder(output_size, embed_size, hidden_size, attn_size, attn_name).to(device)
+        self.decoder = LuongDecoder(output_size, embed_size, hidden_size, attn_size, attn_name).to(device)
 
     def forward(self, x, target_length):
 
