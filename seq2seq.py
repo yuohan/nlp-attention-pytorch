@@ -1,61 +1,63 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from tokenizer import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 
 class Encoder(nn.Module):
 
-    def __init__(self, input_size, embed_size, hidden_size):
+    def __init__(self, input_size, embed_size, hidden_size, num_layers, bidirectional=True):
         super(Encoder, self).__init__()
+
+        self.input_size = input_size
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.bidirectional = bidirectional
         
         self.embedding = nn.Embedding(input_size, embed_size)
-        self.gru = nn.GRU(embed_size, hidden_size, batch_first=True)
+        self.rnn = nn.GRU(embed_size, hidden_size, num_layers, bidirectional=bidirectional)
 
     def forward(self, input_tensor):
         """
         Parameters
         ----------
-        input: tensor (batch_size, input_length)
-        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        input: tensor (input_length, batch_size)
 
         Return
         ------
-        output: tensor (batch_size, input_length, hidden_size)
-        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        output: tensor (input_length, batch_size, hidden_size)
+        hidden: tensor (num_layers, batch_size, hidden_size)
         """
-        # (batch_size, input_length)
-        mask = input_tensor.eq(PAD_TOKEN)
-        input_lengths = input_tensor.size(1) - torch.sum(mask, dim=1)
-
-        # embedded (batch_size, input_length, embed_size)
+        # embedded (input_length, batch_size, embed_size)
         embedded = self.embedding(input_tensor)
-        packed = pack_padded_sequence(embedded, input_lengths, batch_first=True)
-        packed_output, hidden = self.gru(packed)
-        output, input_lengths = pad_packed_sequence(packed_output, batch_first=True)
+        output, hidden = self.rnn(embedded)
 
-        return output, hidden, mask
+        if self.bidirectional:
+            output = output[:, :, :self.hidden_size] + output[:, : ,self.hidden_size:]
+            hidden = hidden[:self.num_layers]
+
+        return output, hidden
 
 class AttentionLayer(nn.Module):
 
-    def __init__(self, score_func, hidden_size, attn_size):
+    def __init__(self, name, hidden_size, attn_size):
         super(AttentionLayer, self).__init__()
 
-        if score_func in ['add', 'additive']:
+        if name in ['add', 'additive']:
             self.w1 = nn.Linear(hidden_size, attn_size)
             self.w2 = nn.Linear(hidden_size, attn_size)
             self.v = nn.Linear(attn_size, 1)
             self.score = self.additive_score
 
-        elif score_func == 'dot':
+        elif name == 'dot':
             self.score = self.dot_score
 
-        elif score_func in ['general', 'mul', 'multiplicative']:
+        elif name in ['general', 'mul', 'multiplicative']:
             self.w = nn.Linear(hidden_size, hidden_size)
             self.score = self.general_score
 
-        elif score_func == 'concat':
+        elif name == 'concat':
             self.w = nn.Linear(hidden_size*2, attn_size)
             self.v = nn.Linear(attn_size, 1)
             self.score = self.concat_score
@@ -65,107 +67,65 @@ class AttentionLayer(nn.Module):
 
     # query: tensor (batch_size, hidden_size)
     # hidden state of decoder (previous or current)
-    # value: tensor (batch_size, input_length, hidden_size)
+    # values: tensor (input_length, batch_size, hidden_size)
     # hidden state of input sequences from encoder
-    def additive_score(self, query, value):
-        return self.v(torch.tanh(self.w1(query.unsqueeze(1)) + self.w2(value))).squeeze(2)
+    def additive_score(self, query, values):
+        return self.v(torch.tanh(self.w1(query.unsqueeze(0)) + self.w2(values))).squeeze(2)
     
-    def dot_score(self, query, value):
-        return torch.bmm(query.unsqueeze(1), value.transpose(1,2)).squeeze(1)
+    def dot_score(self, query, values):
+        return torch.sum(torch.mul(query, values), dim=2)
 
-    def general_score(self, query, value):
-        return torch.bmm(value, self.w(query).unsqueeze(2)).squeeze(2)
+    def general_score(self, query, values):
+        return torch.sum(torch.mul(query, self.w(values)), dim=2)
 
-    def concat_score(self, query, value):
-        query = query.unsqueeze(1).expand(-1, value.size(1), -1)
-        return self.v(torch.tanh(self.w(torch.cat((query, value),dim=2)))).squeeze(2)
+    def concat_score(self, query, values):
+        query = query.expand(values.size(0), -1, -1)
+        return self.v(torch.tanh(self.w(torch.cat((query, values),dim=2)))).squeeze(2)
 
-    def forward(self, decoder_hidden, encoder_outputs, encoder_mask=None):
+    def forward(self, decoder_hidden, encoder_outputs):
         """
         Parameters
         ----------
         decoder_hidden: tensor (batch_size, hidden_size)
-        encoder_outputs: tensor (batch_size, input_length, hidden_size)
+        encoder_outputs: tensor (input_length, batch_size, hidden_size)
 
         Return
         ------
         conext: tensor (batch_size, hidden_size)
-        score aligned: tensor (batch_size, input_length)
+        score: tensor (input_length, batch_size)
         """
         # calculate attention score
+        # score (input_length, batch_size)
         score = self.score(decoder_hidden, encoder_outputs)
-        # don't attend over padding
-        if encoder_mask is not None:
-            score = score.masked_fill_(encoder_mask, float('-inf'))
         # align (batch_size, input_length)
-        align = F.softmax(score, dim=1)
-        # context vector (batch_size, hidden_size)
-        context = torch.mul(align.unsqueeze(2), encoder_outputs)
-        context = torch.sum(context, dim=1)
+        align = F.softmax(score.t(), dim=1)
+        # context vector (batch_size, 1, hidden_size)
+        context = torch.bmm(align.unsqueeze(1), encoder_outputs.transpose(0, 1))
         return context, align
 
 class BahdanauDecoder(nn.Module):
     """ Bahdanau-style decoder
     """
-    def __init__(self, output_size, embed_size, hidden_size, attn_size, attn_name):
+    def __init__(self, attn_name, output_size, embed_size, hidden_size, attn_size, num_layers):
         super(BahdanauDecoder, self).__init__()
 
+        self.attn_name = attn_name
+        self.output_size = output_size
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.attn_size = attn_size
+        self.num_layers = num_layers
+
         self.embedding = nn.Embedding(output_size, embed_size)
-        self.gru = nn.GRU(embed_size+hidden_size, hidden_size, batch_first=True)
+        self.rnn = nn.GRU(embed_size+hidden_size, hidden_size)
         self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
         self.out = nn.Linear(hidden_size, output_size)
 
-    def forward(self, input, hidden, encoder_outputs, encoder_mask):
+    def forward(self, input, hidden, encoder_outputs):
         """
         Parameters
         ----------
-        input: tensor (batch_size, 1)
-        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
-        encoder_outputs: tensor (batch_size, input_length, hidden_size)
-
-        Return
-        ------
-        output: tensor (batch_size, hidden_size)
-        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
-        score: tensor (batch_size, input_length)
-        """
-        # get context vector
-        context, score = self.attention(hidden[-1], encoder_outputs, encoder_mask)
-
-        # embedded (batch_size, 1, embed_size)
-        embedded = self.embedding(input)
-
-        # concat context and embedded
-        # (batch_size, 1, hidden_size+embed_size)
-        concat = torch.cat((context.unsqueeze(1), embedded), dim=2)
-
-        # output (batch_size, 1, hidden_size)
-        # hidden (num_layers*num_directions, batch_size, hidden_size)
-        output, hidden = self.gru(concat)
-
-        #attentional hidden state
-        output = self.out(output)
-        output = F.log_softmax(output.squeeze(1), dim=1)
-
-        return output, hidden, score
-
-class LuongDecoder(nn.Module):
-    """ Luong-style decoder
-    """
-    def __init__(self, output_size, embed_size, hidden_size, attn_size, attn_name):
-        super(LuongDecoder, self).__init__()
-
-        self.embedding = nn.Embedding(output_size, embed_size)
-        self.gru = nn.GRU(embed_size, hidden_size)
-        self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
-        self.concat = nn.Linear(hidden_size*2, hidden_size)
-        self.out = nn.Linear(hidden_size, output_size)
-
-    def forward(self, input, hidden, encoder_outputs, encoder_mask):
-        """
-        Parameters
-        ----------
-        input: tensor (seq_length(1), batch_size)
+        input: tensor (1, batch_size)
         hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
         encoder_outputs: tensor (input_length, batch_size, hidden_size)
 
@@ -178,14 +138,66 @@ class LuongDecoder(nn.Module):
         # embedded (1, batch_size, embed_size)
         embedded = self.embedding(input)
 
-        # rnn_output (1, batch_size, hidden_size)
-        rnn_output, hidden = self.gru(embedded, hidden)
+        # get context vector
+        context, score = self.attention(hidden[-1], encoder_outputs)
+
+        # concat context and embedded
+        # (1, batch_size, hidden_size+embed_size)
+        concat_output = torch.cat((context.transpose(0,1), embedded), dim=2)
+
+        # rnn (1, batch_size, hidden_size)
+        # hidden (num_layers*num_directions, batch_size, hidden_size)
+        rnn_output, hidden = self.rnn(concat_output)
+
+        #attentional hidden state
+        output = F.log_softmax(self.out(rnn_output.squeeze(0)), dim=1)
+
+        return output, hidden, score
+
+class LuongDecoder(nn.Module):
+    """ Luong-style decoder
+    """
+    def __init__(self, attn_name, output_size, embed_size, hidden_size, attn_size, num_layers):
+        super(LuongDecoder, self).__init__()
+
+        self.attn_name = attn_name
+        self.output_size = output_size
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.attn_size = attn_size
+        self.num_layers = num_layers
+
+        self.embedding = nn.Embedding(output_size, embed_size)
+        self.rnn = nn.GRU(embed_size, hidden_size, num_layers)
+        self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
+        self.concat = nn.Linear(hidden_size*2, hidden_size)
+        self.out = nn.Linear(hidden_size, output_size)
+
+    def forward(self, input, hidden, encoder_outputs):
+        """
+        Parameters
+        ----------
+        input: tensor (1, batch_size)
+        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        encoder_outputs: tensor (input_length, batch_size, hidden_size)
+
+        Return
+        ------
+        output: tensor (batch_size, hidden_size)
+        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        score: tensor (input_length, batch_size)
+        """
+        # embedded (1, batch_size, embed_size)
+        embedded = self.embedding(input)
+
+        # rnn (1, batch_size, hidden_size)
+        rnn_output, hidden = self.rnn(embedded, hidden)
 
         # get context vector
-        context, score = self.attention(hidden[-1], encoder_outputs, encoder_mask)
+        context, score = self.attention(hidden[-1], encoder_outputs)
 
-        # concat_output (batch_size, hidden_size)
-        concat_output = torch.tanh(self.concat(torch.cat((rnn_output.squeeze(0), context.squeeze(1)), 1)))
+        # concat (batch_size, hidden_size)
+        concat_output = torch.tanh(self.concat(torch.cat((hidden[-1], context.squeeze(1)), 1)))
 
         # output (batch_size, hidden_size)
         output = F.log_softmax(self.out(concat_output), dim=1)
@@ -194,43 +206,50 @@ class LuongDecoder(nn.Module):
 
 class Seq2seq(nn.Module):
 
-    def __init__(self, input_size, output_size, embed_size, hidden_size, 
-                 attn_size, attn_name, device):
+    def __init__(self, dec_name, attn_name, input_size, output_size, 
+                embed_size, hidden_size, attn_size, num_layers, device):
         super(Seq2seq, self).__init__()
 
+        self.dec_name = dec_name
+        self.attn_name = attn_name
         self.input_size = input_size
         self.output_size = output_size
         self.embed_size = embed_size
         self.hidden_size = hidden_size
         self.attn_size = attn_size
-        self.attn_name = attn_name
+        self.num_layers = num_layers
 
         self.device = device
 
-        self.encoder = Encoder(input_size, embed_size, hidden_size).to(device)
-        self.decoder = LuongDecoder(output_size, embed_size, hidden_size, attn_size, attn_name).to(device)
+        self.encoder = Encoder(input_size, embed_size, hidden_size, num_layers)
+        if dec_name == 'Bahdanau':
+            self.decoder = BahdanauDecoder(attn_name, output_size, embed_size, hidden_size, attn_size, num_layers)
+        elif dec_name == 'Luong':
+            self.decoder = LuongDecoder(attn_name, output_size, embed_size, hidden_size, attn_size, num_layers)
+        else:
+            raise ValueError()
 
     def forward(self, x, target_length):
 
-        batch_size = x.size(0)
-        input_length = x.size(1)
+        input_length = x.size(0)
+        batch_size = x.size(1)
 
         # encoder
-        encoder_outputs, encoder_hidden, encoder_mask = self.encoder(x)
+        encoder_outputs, encoder_hidden = self.encoder(x)
 
         # decoder
         decoder_outputs = []
         attentions = []
 
-        decoder_input = torch.tensor(SOS_TOKEN, dtype=torch.long, device=self.device).expand(batch_size, 1)
+        decoder_input = torch.tensor(SOS_TOKEN, dtype=torch.long, device=self.device).expand(1, batch_size)
         decoder_hidden = encoder_hidden
 
         for i in range(target_length):
             decoder_output, decoder_hidden, attention = \
-                self.decoder(decoder_input, decoder_hidden, encoder_outputs, encoder_mask)
+                self.decoder(decoder_input, decoder_hidden, encoder_outputs)
 
             topv, topi = decoder_output.topk(1, dim=1)
-            decoder_input = topi.detach()
+            decoder_input = topi.detach().t()
 
             decoder_outputs.append(decoder_output)
             attentions.append(attention.squeeze())
@@ -239,32 +258,40 @@ class Seq2seq(nn.Module):
         return torch.stack(decoder_outputs, dim=0), torch.stack(attentions, dim=0)
 
     def save(self, path, info=None):
-        
+
         state = {
             'state_dict': self.state_dict(),
+            'decoder_name': self.dec_name,
+            'attention_name': self.attn_name,
             'input_size': self.input_size,
             'output_size': self.output_size,
             'embedding_size': self.embed_size,
             'hidden_size': self.hidden_size,
             'attention_size': self.attn_size,
-            'attention_name': self.attn_name
+            'num_layers': self.num_layers
         }
         if info != None:
             state = {**info, **state}
         torch.save(state, path)
+        if info != None:
+            state = {**info, **state}
+        torch.save(state, path)
 
-def load_model(state_path, device):
+    @classmethod
+    def load(cls, state_path, device):
 
-    state = torch.load(state_path, map_location=device)
+        state = torch.load(state_path, map_location=device)
 
-    attn_name = state['attention_name']
-    attn_size = state['attention_size']
-    embed_size = state['embedding_size']
-    hidden_size = state['hidden_size']
-    input_size = state['input_size']
-    output_size = state['output_size']
+        dec_name = state['decoder_name']
+        attn_name = state['attention_name']
+        attn_size = state['attention_size']
+        embed_size = state['embedding_size']
+        hidden_size = state['hidden_size']
+        input_size = state['input_size']
+        output_size = state['output_size']
+        num_layrs = state['num_layers']
 
-    model = Seq2seq(input_size, output_size, embed_size, hidden_size, attn_size, attn_name, device)
-    model.load_state_dict(state['state_dict'])
+        model = cls(dec_name, attn_name, input_size, output_size, embed_size, hidden_size, attn_size, num_layers, device).to(device)
+        model.load_state_dict(state['state_dict'])
 
-    return model
+        return model

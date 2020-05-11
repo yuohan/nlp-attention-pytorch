@@ -7,7 +7,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 from tokenizer import Tokenizer
-from seq2seq import Seq2seq, load_model
+from seq2seq import Seq2seq
 
 def preprocess(s):
     # Turn a Unicode string to plain ASCII, thanks to
@@ -26,8 +26,8 @@ def preprocess(s):
 def translate(model, input_data, target_lang, max_length, device):
 
     with torch.no_grad():
-        input_tensor = torch.tensor(input_data, dtype=torch.long, device=device).view(1,-1)
-        input_length = input_tensor.size(1)
+        input_tensor = torch.tensor(input_data, dtype=torch.long, device=device).view(-1, 1)
+        input_length = input_tensor.size(0)
 
         output, attention = model(input_tensor, max_length)
         topv, topi = output.topk(1, dim=2)
@@ -40,7 +40,7 @@ def main(text, model_path, input_lang_path, target_lang_path, show_attention=Fal
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # load model
-    model = load_model(model_path, device)
+    model = Seq2seq.load(model_path, device)
 
     # load tokenizer
     input_lang = Tokenizer(None)

@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from tokenizer import Tokenizer, PAD_TOKEN
-from seq2seq import Seq2seq
+from seq2seq import Seq2seq, Encoder, BahdanauDecoder, LuongDecoder
 
 def load_data(data_path, input_name, target_name, encoding='utf-8'):
 
@@ -80,20 +80,20 @@ def generate_batch(pairs, batch_size, device, shuffle=True):
         padded_x = pad_sequence(sorted_x)
         padded_y = pad_sequence(sorted_y)
         # array to tensor
-        input_tensor = torch.tensor(padded_x, dtype=torch.long, device=device)
-        target_tensor = torch.tensor(padded_y, dtype=torch.long, device=device)
+        input_tensor = torch.tensor(padded_x, dtype=torch.long, device=device).t()
+        target_tensor = torch.tensor(padded_y, dtype=torch.long, device=device).t()
         yield input_tensor, target_tensor, idx, steps_per_epoch
 
 def train(input_tensor, target_tensor, model, optimizer, criterion):
 
-    target_length = target_tensor.size(1)
+    target_length = target_tensor.size(0)
 
     optimizer.zero_grad()
     outputs, _ = model(input_tensor, target_length)
 
     loss = 0
     for i in range(target_length):
-        loss += criterion(outputs[i], target_tensor[:,i])
+        loss += criterion(outputs[i], target_tensor[i])
     loss.backward()
     optimizer.step()
 
@@ -136,13 +136,14 @@ def train_loop(pairs, model, epochs, batch_size, learning_rate, device, print_ev
         print()
 
 def main(data_path, input_lang_name, target_lang_name, save_path,
-        epochs, batch_size, learning_rate, attn_name, attn_size, hidden_size, embed_size):
+        epochs, batch_size, learning_rate, dec_name, attn_name,
+        attn_size, hidden_size, embed_size, num_layers):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     input_lang, target_lang, pairs = load_data(data_path, input_lang_name, target_lang_name)
 
-    model = Seq2seq(input_lang.num_words, target_lang.num_words, embed_size, hidden_size, attn_size, attn_name, device)
+    model = Seq2seq(dec_name, attn_name, input_lang.num_words, target_lang.num_words, embed_size, hidden_size, attn_size, num_layers, device).to(device)
     train_loop(pairs, model, epochs, batch_size, learning_rate, device)
 
     model.save(f'{save_path}/model.pth')
