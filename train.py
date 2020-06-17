@@ -1,5 +1,3 @@
-import time
-import math
 import yaml
 import argparse
 
@@ -13,75 +11,74 @@ from torchtext.data.utils import get_tokenizer
 
 from seq2seq import Seq2seq
 
-def make_datasets(batch_size, device):
+def make_datasets(input_lang_name, target_lang_name, batch_size, device):
 
-    input_lang = Field(tokenize=get_tokenizer('spacy', language='de'),
+    input_lang = Field(tokenize=get_tokenizer('spacy', language=input_lang_name),
                 init_token='<sos>',
                 eos_token='<eos>',
                 lower=True)
 
-    target_lang = Field(tokenize=get_tokenizer('spacy', language='en'),
+    target_lang = Field(tokenize=get_tokenizer('spacy', language=target_lang_name),
                 init_token='<sos>',
                 eos_token='<eos>',
                 lower=True)
 
-    train_data, valid_data, _ = Multi30k.splits(exts = ('.de', '.en'), fields = (src, trg))
+    exts = ('.'+input_lang_name, '.'+target_lang_name)
+    train_data, valid_data, _ = Multi30k.splits(exts=exts, fields=(input_lang, target_lang))
     input_lang.build_vocab(train_data)
     target_lang.build_vocab(train_data)
 
     train_iterator, valid_iterator = BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device)
-    return train_iterator, input_lang, target_lang
+    return train_iterator, valid_iterator, input_lang, target_lang
 
-def train(input_tensor, target_tensor, model, optimizer, criterion):
+class Trainer:
 
-    target_length = target_tensor.size(0)
+    def __init__(self, model, train_loader, val_loader, input_lang, target_lang):
 
-    optimizer.zero_grad()
-    outputs, _ = model(input_tensor, target_length)
+        self.model = model
+        self.data_loaders = {'train':train_loader, 'val':val_loader}
+        self.pad_token = target_lang.vocab.stoi['<pad>']
 
-    loss = 0
-    for i in range(target_length):
-        loss += criterion(outputs[i], target_tensor[i])
-    loss.backward()
-    optimizer.step()
+    def train(self, epochs, learning_rate):
 
-    return loss.item() / target_length
+        optimizer = optim.SGD(self.model.parameters(), lr=learning_rate)
+        criterion = torch.nn.NLLLoss(ignore_index=self.pad_token)
+        epoch_loss = {'train':0, 'val':0}
 
-def as_minute(s):
-    m = math.floor(s / 60)
-    s -= m * 60
-    return f'{m:2}m {int(s):2}s'
+        for epoch in range(epochs):
+            print (f'Epoch {epoch+1}/{epochs}')
 
-def print_log(start, now, loss, cur_step, total_step):
+            for phase in ['train', 'val']:
+                if phase == 'train':
+                    self.model.train()
+                else:
+                    self.model.eval()
 
-    s = now - start
-    es = s / (cur_step/total_step)
-    rs = es - s
+                epoch_loss[phase] = 0
+                for batch in tqdm(self.data_loaders[phase]):
+                    input_tensor = batch.src
+                    target_tensor = batch.trg
+                    target_length = target_tensor.size(0)
 
-    print(f'\r{as_minute(s)} (-{as_minute(rs)}({cur_step}/{total_step}) {loss:.4f}', end='')
+                    optimizer.zero_grad()
 
-def train_loop(pairs, model, epochs, batch_size, learning_rate, pad_token, device, print_every=5.0):
+                    loss = 0
+                    with torch.set_grad_enabled(phase == 'train'):
+                        outputs, _ = self.model(input_tensor, target_length)
+                        for i in range(target_length):
+                            loss += criterion(outputs[i], target_tensor[i])
+                        
+                        if phase == 'train':
+                            loss.backward()
+                            optimizer.step()
 
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.NLLLoss(ignore_index=pad_token)
+                        epoch_loss[phase] += loss.item()/ target_length
 
-    for epoch in range(1, epochs+1):
+                epoch_loss[phase] /= len(self.data_loaders[phase])
 
-        print (f'epoch: {epoch}/{epochs}')
-
-        batch_loss_total = 0
-        start = time.time()
-        last = start
-        for input_tensor, target_tensor, idx, steps_per_epoch in generate_batch(pairs, batch_size, device):
-            loss = train(input_tensor, target_tensor, model, optimizer, criterion)
-            batch_loss_total += loss
-
-            now = time.time()
-            if (now - last) > print_every or idx == steps_per_epoch:
-                last = now
-                batch_loss_avg = batch_loss_total / idx
-                print_log(start, now, batch_loss_avg, idx, steps_per_epoch)
-        print()
+            for phase in ['train', 'val']:
+                print(f'{phase} Loss: {epoch_loss[phase]:.4f}')
+            print('-'*10)
 
 def main(data_path, input_lang_name, target_lang_name, save_path,
         epochs, batch_size, learning_rate, dec_name, attn_name,
@@ -89,12 +86,12 @@ def main(data_path, input_lang_name, target_lang_name, save_path,
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    train_iterator, input_lang, target_lang = make_datasets(batch_size, device)
-    PAD_TOKEN = target_lang.vocab.stoi['<pad>']
+    train_iterator, val_iterator, input_lang, target_lang = make_datasets(input_lang_name, target_lang_name, batch_size, device)
     SOS_TOKEN = target_lang.vocab.stoi['<sos>']
 
-    model = Seq2seq(dec_name, attn_name, input_lang.num_words, target_lang.num_words, embed_size, hidden_size, attn_size, num_layers, SOS_TOKEN, device).to(device)
-    train_loop(pairs, model, epochs, batch_size, learning_rate, PAD_TOKEN, device)
+    model = Seq2seq(dec_name, attn_name, len(input_lang.vocab), len(target_lang.vocab), embed_size, hidden_size, attn_size, num_layers, SOS_TOKEN, device).to(device)
+    trainer = Trainer(model, train_iterator, val_iterator, input_lang, target_lang)
+    trainer.train(epochs, learning_rate)
 
     model.save(f'{save_path}/model.pth', input_lang, target_lang)
     
