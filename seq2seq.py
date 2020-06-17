@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from tokenizer import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
-
 class Encoder(nn.Module):
 
     def __init__(self, input_size, embed_size, hidden_size, num_layers, bidirectional=True):
@@ -207,7 +205,7 @@ class LuongDecoder(nn.Module):
 class Seq2seq(nn.Module):
 
     def __init__(self, dec_name, attn_name, input_size, output_size, 
-                embed_size, hidden_size, attn_size, num_layers, device):
+                embed_size, hidden_size, attn_size, num_layers, sos_token, device):
         super(Seq2seq, self).__init__()
 
         self.dec_name = dec_name
@@ -218,6 +216,7 @@ class Seq2seq(nn.Module):
         self.hidden_size = hidden_size
         self.attn_size = attn_size
         self.num_layers = num_layers
+        self.sos_token = sos_token
 
         self.device = device
 
@@ -241,7 +240,7 @@ class Seq2seq(nn.Module):
         decoder_outputs = []
         attentions = []
 
-        decoder_input = torch.tensor(SOS_TOKEN, dtype=torch.long, device=self.device).expand(1, batch_size)
+        decoder_input = torch.tensor(self.sos_token, dtype=torch.long, device=self.device).expand(1, batch_size)
         decoder_hidden = encoder_hidden
 
         for i in range(target_length):
@@ -257,7 +256,7 @@ class Seq2seq(nn.Module):
         #(target_length, batch_size, output_size), (target_length, batch_size, input_length)
         return torch.stack(decoder_outputs, dim=0), torch.stack(attentions, dim=0)
 
-    def save(self, path, info=None):
+    def save(self, path, input_lang, target_lang, info=None):
 
         state = {
             'state_dict': self.state_dict(),
@@ -268,11 +267,10 @@ class Seq2seq(nn.Module):
             'embedding_size': self.embed_size,
             'hidden_size': self.hidden_size,
             'attention_size': self.attn_size,
-            'num_layers': self.num_layers
+            'num_layers': self.num_layers,
+            'input_lang': input_lang,
+            'target_lang': target_lang
         }
-        if info != None:
-            state = {**info, **state}
-        torch.save(state, path)
         if info != None:
             state = {**info, **state}
         torch.save(state, path)
@@ -294,4 +292,4 @@ class Seq2seq(nn.Module):
         model = cls(dec_name, attn_name, input_size, output_size, embed_size, hidden_size, attn_size, num_layers, device).to(device)
         model.load_state_dict(state['state_dict'])
 
-        return model
+        return model, state['input_lang'], state['target_lang']
