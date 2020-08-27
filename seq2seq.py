@@ -2,41 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Encoder(nn.Module):
-
-    def __init__(self, input_size, embed_size, hidden_size, num_layers, bidirectional=True):
-        super(Encoder, self).__init__()
-
-        self.input_size = input_size
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.bidirectional = bidirectional
-        
-        self.embedding = nn.Embedding(input_size, embed_size)
-        self.rnn = nn.GRU(embed_size, hidden_size, num_layers, bidirectional=bidirectional)
-
-    def forward(self, input_tensor):
-        """
-        Parameters
-        ----------
-        input: tensor (input_length, batch_size)
-
-        Return
-        ------
-        output: tensor (input_length, batch_size, hidden_size)
-        hidden: tensor (num_layers, batch_size, hidden_size)
-        """
-        # embedded (input_length, batch_size, embed_size)
-        embedded = self.embedding(input_tensor)
-        output, hidden = self.rnn(embedded)
-
-        if self.bidirectional:
-            output = output[:, :, :self.hidden_size] + output[:, : ,self.hidden_size:]
-            hidden = hidden[:self.num_layers]
-
-        return output, hidden
-
 class BahdanauEncoder(nn.Module):
     """ Bahdanau-style decoder
     """
@@ -66,6 +31,37 @@ class BahdanauEncoder(nn.Module):
         # s0 = tanh(Wh)
         # hidden (1, batch_size, hidden_dim)
         hidden = torch.tanh(self.fc(hidden[-1:,:,:]))
+
+        return output, hidden
+
+class LuongEncoder(nn.Module):
+    """ Luong-style encoder
+    """
+    def __init__(self, input_dim, embed_dim, hidden_dim, num_layers):
+        super(LuongEncoder, self).__init__()
+
+        self.input_dim = input_dim
+        self.embed_dim = embed_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        
+        self.embedding = nn.Embedding(input_dim, embed_dim)
+        self.rnn = nn.LSTM(embed_dim, hidden_dim, num_layers)
+
+    def forward(self, input_tensor):
+        """
+        Parameters
+        ----------
+        input: tensor (input_length, batch_size)
+
+        Return
+        ------
+        output: tensor (input_length, batch_size, hidden_dim)
+        hidden: tensor (num_layers, batch_size, hidden_dim)
+        """
+        # embedded (input_length, batch_size, embed_dim)
+        embedded = self.embedding(input_tensor)
+        output, hidden = self.rnn(embedded)
 
         return output, hidden
 
@@ -185,21 +181,19 @@ class BahdanauDecoder(nn.Module):
 class LuongDecoder(nn.Module):
     """ Luong-style decoder
     """
-    def __init__(self, attn_name, output_size, embed_size, hidden_size, attn_size, num_layers):
+    def __init__(self, attn_name, output_dim, embed_dim, hidden_dim, attn_dim, num_layers):
         super(LuongDecoder, self).__init__()
 
-        self.attn_name = attn_name
-        self.output_size = output_size
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.attn_size = attn_size
+        self.output_dim = output_dim
+        self.embed_dim = embed_dim
+        self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        self.embedding = nn.Embedding(output_size, embed_size)
-        self.rnn = nn.GRU(embed_size, hidden_size, num_layers)
-        self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
-        self.concat = nn.Linear(hidden_size*2, hidden_size)
-        self.out = nn.Linear(hidden_size, output_size)
+        self.embedding = nn.Embedding(output_dim, embed_dim)
+        self.rnn = nn.LSTM(embed_dim, hidden_dim, num_layers)
+        self.attention = AttentionLayer(attn_name, hidden_dim, hidden_dim, attn_dim)
+        self.concat = nn.Linear(hidden_dim*2, hidden_dim)
+        self.out = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, input, hidden, encoder_outputs):
         """
@@ -222,15 +216,15 @@ class LuongDecoder(nn.Module):
         rnn_output, hidden = self.rnn(embedded, hidden)
 
         # get context vector
-        context, score = self.attention(hidden[-1], encoder_outputs)
+        context, score = self.attention(rnn_output[0], encoder_outputs)
 
         # concat (batch_size, hidden_size)
-        concat_output = torch.tanh(self.concat(torch.cat((hidden[-1], context.squeeze(1)), 1)))
+        attn_hidden = torch.tanh(self.concat(torch.cat((rnn_output[0], context.squeeze(1)), 1)))
 
         # output (batch_size, hidden_size)
-        output = F.log_softmax(self.out(concat_output), dim=1)
+        output = F.log_softmax(self.out(attn_hidden), dim=1)
 
-        return output, hidden, score 
+        return output, hidden, score
 
 class Seq2seq(nn.Module):
 
@@ -254,8 +248,8 @@ class Seq2seq(nn.Module):
             self.encoder = BahdanauEncoder(input_dim, embed_dim, hidden_dim)
             self.decoder = BahdanauDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim)
         elif style == 'Luong':
-            self.encoder = Encoder(input_dim, embed_dim, hidden_dim, num_layers)
-            self.decoder = LuongDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_size, num_layers)
+            self.encoder = LuongEncoder(input_dim, embed_dim, hidden_dim, num_layers)
+            self.decoder = LuongDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim, num_layers)
         else:
             raise ValueError()
 
