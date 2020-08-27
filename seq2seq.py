@@ -37,6 +37,38 @@ class Encoder(nn.Module):
 
         return output, hidden
 
+class BahdanauEncoder(nn.Module):
+    """ Bahdanau-style decoder
+    """
+    def __init__(self, input_dim, embed_dim, hidden_dim):
+        super(BahdanauEncoder, self).__init__()
+
+        self.embedding = nn.Embedding(input_dim, embed_dim)
+        self.rnn = nn.GRU(embed_dim, hidden_dim, bidirectional=True)
+        self.fc = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, input):
+        """
+        Parameters
+        ----------
+        input: tensor (input_length, batch_size)
+
+        Return
+        ------
+        output: tensor (input_length, batch_size, hidden_size)
+        hidden: tensor (num_layers, batch_size, hidden_size)
+        """
+        # embed (input_length, batch_size, embed_dim)
+        embed = self.embedding(input)
+        # output (input_length, batch_size, hidden_dim*2)
+        output, hidden = self.rnn(embed)
+
+        # s0 = tanh(Wh)
+        # hidden (1, batch_size, hidden_dim)
+        hidden = torch.tanh(self.fc(hidden[-1:,:,:]))
+
+        return output, hidden
+
 class AttentionLayer(nn.Module):
 
     def __init__(self, name, hidden_size, attn_size):
@@ -104,53 +136,51 @@ class AttentionLayer(nn.Module):
 class BahdanauDecoder(nn.Module):
     """ Bahdanau-style decoder
     """
-    def __init__(self, attn_name, output_size, embed_size, hidden_size, attn_size, num_layers):
+    def __init__(self, attn_name, output_size, embed_size, hidden_size, attn_dim):
         super(BahdanauDecoder, self).__init__()
 
         self.attn_name = attn_name
-        self.output_size = output_size
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.attn_size = attn_size
-        self.num_layers = num_layers
+        self.output_dim = output_dim
+        self.embed_dim = embed_dim
+        self.hidden_dim = hidden_dim
+        self.attn_dim = attn_dim
 
-        self.embedding = nn.Embedding(output_size, embed_size)
-        self.rnn = nn.GRU(embed_size+hidden_size, hidden_size)
-        self.attention = AttentionLayer(attn_name, hidden_size, attn_size)
-        self.out = nn.Linear(hidden_size, output_size)
+        self.attn = AttentionLayer(attn_name, hidden_dim, hidden_dim*2, attn_dim)
+        self.embedding = nn.Embedding(output_dim, embed_dim)
+        self.rnn = nn.GRU((embed_dim+hidden_dim*2), hidden_dim)
+        self.out = nn.Linear((hidden_dim*2+hidden_dim+embed_dim), output_dim)
 
     def forward(self, input, hidden, encoder_outputs):
         """
         Parameters
         ----------
         input: tensor (1, batch_size)
-        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        hidden: tensor (num_layers, batch_size, hidden_size)
         encoder_outputs: tensor (input_length, batch_size, hidden_size)
 
         Return
         ------
         output: tensor (batch_size, hidden_size)
-        hidden: tensor (num_layers*num_directions, batch_size, hidden_size)
+        hidden: tensor (num_layers, batch_size, hidden_size)
         score: tensor (input_length, batch_size)
         """
-        # embedded (1, batch_size, embed_size)
-        embedded = self.embedding(input)
+        context, score = self.attn(hidden[-1], encoder_outputs)
 
-        # get context vector
-        context, score = self.attention(hidden[-1], encoder_outputs)
+        # embed (1, batch_size, embed_dim)
+        embed = self.embedding(input)
 
         # concat context and embedded
         # (1, batch_size, hidden_size+embed_size)
-        concat_output = torch.cat((context.transpose(0,1), embedded), dim=2)
+        concat_output = torch.cat((context.transpose(0,1), embed), dim=2)
 
         # rnn (1, batch_size, hidden_size)
         # hidden (num_layers*num_directions, batch_size, hidden_size)
-        rnn_output, hidden = self.rnn(concat_output)
+        rnn_output, hidden = self.rnn(concat_output, hidden)
 
-        #attentional hidden state
-        output = F.log_softmax(self.out(rnn_output.squeeze(0)), dim=1)
+        # output (1, batch_size, output_dim)
+        output = F.log_softmax(self.out(torch.cat([embed, rnn_output, context.transpose(0,1)], dim=2)), dim=2)
 
-        return output, hidden, score
+        return output.squeeze(0), hidden, score
 
 class LuongDecoder(nn.Module):
     """ Luong-style decoder
@@ -204,27 +234,28 @@ class LuongDecoder(nn.Module):
 
 class Seq2seq(nn.Module):
 
-    def __init__(self, dec_name, attn_name, input_size, output_size, 
-                embed_size, hidden_size, attn_size, num_layers, sos_token, device):
+    def __init__(self, style, attn_name, input_dim, output_dim, 
+                embed_dim, hidden_dim, attn_dim, num_layers, sos_token, device):
         super(Seq2seq, self).__init__()
 
-        self.dec_name = dec_name
+        self.style = style
         self.attn_name = attn_name
-        self.input_size = input_size
-        self.output_size = output_size
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.attn_size = attn_size
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.embed_dim = embed_dim
+        self.hidden_dim = hidden_dim
+        self.attn_dim = attn_dim
         self.num_layers = num_layers
         self.sos_token = sos_token
 
         self.device = device
 
-        self.encoder = Encoder(input_size, embed_size, hidden_size, num_layers)
-        if dec_name == 'Bahdanau':
-            self.decoder = BahdanauDecoder(attn_name, output_size, embed_size, hidden_size, attn_size, num_layers)
-        elif dec_name == 'Luong':
-            self.decoder = LuongDecoder(attn_name, output_size, embed_size, hidden_size, attn_size, num_layers)
+        if style == 'Bahdanau':
+            self.encoder = BahdanauEncoder(input_dim, embed_dim, hidden_dim)
+            self.decoder = BahdanauDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim)
+        elif style == 'Luong':
+            self.encoder = Encoder(input_dim, embed_dim, hidden_dim, num_layers)
+            self.decoder = LuongDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_size, num_layers)
         else:
             raise ValueError()
 
@@ -260,13 +291,13 @@ class Seq2seq(nn.Module):
 
         state = {
             'state_dict': self.state_dict(),
-            'decoder_name': self.dec_name,
+            'style': self.style,
             'attention_name': self.attn_name,
-            'input_size': self.input_size,
-            'output_size': self.output_size,
-            'embedding_size': self.embed_size,
-            'hidden_size': self.hidden_size,
-            'attention_size': self.attn_size,
+            'input_dim': self.input_dim,
+            'output_dim': self.output_dim,
+            'embedding_dim': self.embed_dim,
+            'hidden_dim': self.hidden_dim,
+            'attn_dim': self.attn_dim,
             'num_layers': self.num_layers,
             'input_lang': input_lang,
             'target_lang': target_lang
@@ -280,13 +311,13 @@ class Seq2seq(nn.Module):
 
         state = torch.load(state_path, map_location=device)
 
-        dec_name = state['decoder_name']
+        dec_name = state['style']
         attn_name = state['attention_name']
-        attn_size = state['attention_size']
-        embed_size = state['embedding_size']
-        hidden_size = state['hidden_size']
-        input_size = state['input_size']
-        output_size = state['output_size']
+        attn_size = state['attn_dim']
+        embed_size = state['embedding_dim']
+        hidden_size = state['hidden_dim']
+        input_size = state['input_dim']
+        output_size = state['output_dim']
         num_layrs = state['num_layers']
 
         model = cls(dec_name, attn_name, input_size, output_size, embed_size, hidden_size, attn_size, num_layers, device).to(device)
