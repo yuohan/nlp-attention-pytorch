@@ -37,7 +37,7 @@ class Trainer:
 
         self.model = model
         self.data_loaders = {'train':train_loader, 'val':val_loader}
-        self.pad_token = target_lang.vocab.stoi['<pad>']
+        self.pad_token = target_lang.vocab.stoi[target_lang.pad_token]
 
     def train(self, epochs, learning_rate):
 
@@ -87,7 +87,7 @@ def main(data_path, input_lang_name, target_lang_name, save_path,
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     train_iterator, val_iterator, input_lang, target_lang = make_datasets(input_lang_name, target_lang_name, batch_size, device)
-    SOS_TOKEN = target_lang.vocab.stoi['<sos>']
+    SOS_TOKEN = target_lang.vocab.stoi[target_lang.init_token]
 
     model = Seq2seq(dec_name, attn_name, len(input_lang.vocab), len(target_lang.vocab), embed_size, hidden_size, attn_size, num_layers, SOS_TOKEN, device).to(device)
     trainer = Trainer(model, train_iterator, val_iterator, input_lang, target_lang)
