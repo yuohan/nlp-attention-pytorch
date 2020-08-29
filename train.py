@@ -65,8 +65,8 @@ class Trainer:
                     loss = 0
                     with torch.set_grad_enabled(phase == 'train'):
                         outputs, _ = self.model(input_tensor, target_length)
-                        for i in range(target_length):
-                            loss += criterion(outputs[i], target_tensor[i])
+                        for i in range(target_length-1):
+                            loss += criterion(outputs[i], target_tensor[i+1])
                         
                         if phase == 'train':
                             loss.backward()

@@ -268,7 +268,7 @@ class Seq2seq(nn.Module):
         decoder_input = torch.tensor(self.sos_token, dtype=torch.long, device=self.device).expand(1, batch_size)
         decoder_hidden = encoder_hidden
 
-        for i in range(target_length):
+        for i in range(1, target_length):
             decoder_output, decoder_hidden, attention = \
                 self.decoder(decoder_input, decoder_hidden, encoder_outputs)
 
