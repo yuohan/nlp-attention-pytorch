@@ -201,19 +201,21 @@ class Transformer(nn.Module):
         self.trg_pad_token = trg_pad_token
         self.device = device
 
-    def forward(self, input, target):
+    def forward(self, src, trg):
 
+        trg = trg[:-1]
+        
         # input mask
         # (1, batch_size, 1, input_len)
-        input_mask = (input == self.src_pad_token).transpose(0, 1).unsqueeze(1).unsqueeze(0)
+        src_mask = (input == self.src_pad_token).transpose(0, 1).unsqueeze(1).unsqueeze(0)
 
         # target mask
-        target_len = target.size(0)
+        trg_len = trg.size(0)
         # (target_len, target_len)
-        sub_mask = torch.tril(torch.ones((target_len, target_len), device=self.device)) == 0
+        sub_mask = torch.tril(torch.ones((trg_len, trg_len), device=self.device)) == 0
         # (1, batch_size, 1, target_len)
         pad_mask = (target == self.trg_pad_token).transpose(0, 1).unsqueeze(1).unsqueeze(0)
         # (1, batch_size, target_len, target_len)
-        target_mask = sub_mask | pad_mask
+        trg_mask = sub_mask | pad_mask
 
-        return self.decoder(target, self.encoder(input, input_mask), input_mask, target_mask)
+        return self.decoder(trg, self.encoder(src, src_mask), src_mask, trg_mask)

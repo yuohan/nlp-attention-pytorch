@@ -56,23 +56,27 @@ class Trainer:
 
                 epoch_loss[phase] = 0
                 for batch in tqdm(self.data_loaders[phase]):
-                    input_tensor = batch.src
-                    target_tensor = batch.trg
-                    target_length = target_tensor.size(0)
+                    src = batch.src
+                    trg = batch.trg
+                    trg_len = trg.size(0)
 
                     optimizer.zero_grad()
 
                     loss = 0
                     with torch.set_grad_enabled(phase == 'train'):
-                        outputs, _ = self.model(input_tensor, target_length)
-                        for i in range(target_length-1):
-                            loss += criterion(outputs[i], target_tensor[i+1])
+                        output, _ = self.model(src, trg)
+
+                        d_out = output.shape[-1]
+                        output = output.contiguous().view(-1, d_out)
+                        trg = trg[1:].contiguous().view(-1)
+
+                        loss += criterion(output, trg)
                         
                         if phase == 'train':
                             loss.backward()
                             optimizer.step()
 
-                        epoch_loss[phase] += loss.item()/ target_length
+                        epoch_loss[phase] += loss.item()/ trg_len
 
                 epoch_loss[phase] /= len(self.data_loaders[phase])
 

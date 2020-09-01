@@ -253,13 +253,13 @@ class Seq2seq(nn.Module):
         else:
             raise ValueError()
 
-    def forward(self, x, target_length):
+    def forward(self, src, trg):
 
-        input_length = x.size(0)
-        batch_size = x.size(1)
+        target_length = trg.size(0)
+        batch_size = src.size(1)
 
         # encoder
-        encoder_outputs, encoder_hidden = self.encoder(x)
+        encoder_outputs, encoder_hidden = self.encoder(src)
 
         # decoder
         decoder_outputs = []
