@@ -228,8 +228,8 @@ class LuongDecoder(nn.Module):
 
 class Seq2seq(nn.Module):
 
-    def __init__(self, name, attention, tgt_sos, input_dim, output_dim, 
-                embed_dim, hidden_dim, attn_dim, num_layers)
+    def __init__(self, name, attn_name, tgt_sos, input_dim, output_dim, 
+                embed_dim, hidden_dim, attn_dim, num_layers):
         super(Seq2seq, self).__init__()
 
         self.name = name
@@ -244,10 +244,10 @@ class Seq2seq(nn.Module):
 
         if style == 'Bahdanau':
             self.encoder = BahdanauEncoder(input_dim, embed_dim, hidden_dim)
-            self.decoder = BahdanauDecoder(attention, output_dim, embed_dim, hidden_dim, attn_dim)
+            self.decoder = BahdanauDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim)
         elif style == 'Luong':
             self.encoder = LuongEncoder(input_dim, embed_dim, hidden_dim, num_layers)
-            self.decoder = LuongDecoder(attention, output_dim, embed_dim, hidden_dim, attn_dim, num_layers)
+            self.decoder = LuongDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim, num_layers)
         else:
             raise ValueError()
 
@@ -293,7 +293,7 @@ class Seq2seq(nn.Module):
                 'hidden_dim': self.hidden_dim,
                 'attn_dim': self.attn_dim,
                 'num_layers': self.num_layers,
-            }
+            },
             'input_lang': input_lang,
             'target_lang': target_lang
         }
