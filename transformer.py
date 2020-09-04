@@ -18,7 +18,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        return x.unsqueeze(2) + self.pe[:x.size(0)]
+        return x + self.pe[:x.size(0)]
 
 class PositionWiseFullyConnectedLayer(nn.Module):
 
@@ -187,7 +187,7 @@ class Decoder(nn.Module):
         for layer in self.layers:
             x = layer(x, encoder_outputs, src_mask, tgt_mask)
             
-        return F.log_softmax(self.fc_out(x), dim=2)
+        return F.log_softmax(self.fc_out(x), dim=2), None
 
 class Transformer(nn.Module):
 
@@ -207,14 +207,14 @@ class Transformer(nn.Module):
         
         # input mask
         # (1, batch_size, 1, input_len)
-        src_mask = (input == self.src_pad).transpose(0, 1).unsqueeze(1).unsqueeze(0)
+        src_mask = (src == self.src_pad).transpose(0, 1).unsqueeze(1).unsqueeze(0)
 
         # target mask
         tgt_len = tgt.size(0)
         # (target_len, target_len)
         sub_mask = torch.tril(torch.ones((tgt_len, tgt_len), device=tgt.device)) == 0
         # (1, batch_size, 1, target_len)
-        pad_mask = (target == self.tgt_pad).transpose(0, 1).unsqueeze(1).unsqueeze(0)
+        pad_mask = (tgt == self.tgt_pad).transpose(0, 1).unsqueeze(1).unsqueeze(0)
         # (1, batch_size, target_len, target_len)
         tgt_mask = sub_mask | pad_mask
 

@@ -98,6 +98,7 @@ def main(data_path, save_path, src_lang, tgt_lang,
 
     input_dim = len(src_field.vocab)
     output_dim = len(tgt_field.vocab)
+    model_name = model_params['model_name']
 
     if model_name == 'Transformer':
 

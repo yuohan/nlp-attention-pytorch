@@ -60,19 +60,19 @@ class LuongEncoder(nn.Module):
         hidden: tensor (num_layers, batch_size, hidden_dim)
         """
         # embed (input_length, batch_size, embed_dim)
-        embed = self.embedding(src)
+        embed = self.embedding(input)
         output, hidden = self.rnn(embed)
 
         return output, hidden
 
 class AttentionLayer(nn.Module):
 
-    def __init__(self, name, hidden_dim, attn_dim):
+    def __init__(self, name, query_dim, value_dim, attn_dim):
         super(AttentionLayer, self).__init__()
 
         if name == 'add':
-            self.w1 = nn.Linear(hidden_dim, attn_dim)
-            self.w2 = nn.Linear(hidden_dim, attn_dim)
+            self.w1 = nn.Linear(query_dim, attn_dim)
+            self.w2 = nn.Linear(value_dim, attn_dim)
             self.v = nn.Linear(attn_dim, 1)
             self.score = self.additive_score
 
@@ -80,11 +80,11 @@ class AttentionLayer(nn.Module):
             self.score = self.dot_score
 
         elif name in ['general', 'gen']:
-            self.w = nn.Linear(hidden_dim, hidden_dim)
+            self.w = nn.Linear(value_dim, query_dim)
             self.score = self.general_score
 
         elif name in ['concat', 'cat']:
-            self.w = nn.Linear(hidden_dim*2, attn_dim)
+            self.w = nn.Linear(query_dim+value_dim, attn_dim)
             self.v = nn.Linear(attn_dim, 1)
             self.score = self.concat_score
 
@@ -242,10 +242,10 @@ class Seq2seq(nn.Module):
         self.num_layers = num_layers
         self.tgt_sos = tgt_sos
 
-        if style == 'Bahdanau':
+        if name == 'Bahdanau':
             self.encoder = BahdanauEncoder(input_dim, embed_dim, hidden_dim)
             self.decoder = BahdanauDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim)
-        elif style == 'Luong':
+        elif name == 'Luong':
             self.encoder = LuongEncoder(input_dim, embed_dim, hidden_dim, num_layers)
             self.decoder = LuongDecoder(attn_name, output_dim, embed_dim, hidden_dim, attn_dim, num_layers)
         else:
@@ -277,7 +277,7 @@ class Seq2seq(nn.Module):
             attentions.append(attention.squeeze())
 
         #(target_length, batch_size, output_size), (target_length, batch_size, input_length)
-        return torch.stack(decoder_outputs, dim=0), torch.stack(attentions, dim=0)
+        return torch.stack(deco_outputs, dim=0), torch.stack(attentions, dim=0)
 
     def save(self, path, input_lang, target_lang, info=None):
 
