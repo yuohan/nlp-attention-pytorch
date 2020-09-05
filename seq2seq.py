@@ -278,14 +278,3 @@ class Seq2seq(nn.Module):
 
         #(target_length, batch_size, output_size), (target_length, batch_size, input_length)
         return torch.stack(deco_outputs, dim=0), torch.stack(attentions, dim=0)
-
-    @classmethod
-    def load(cls, state_path, device):
-
-        state = torch.load(state_path, map_location=device)
-
-        params = state['parameter']
-        model = cls(**params).to(device)
-        model.load_state_dict(state['state_dict'])
-
-        return model, state['input_lang'], state['target_lang']

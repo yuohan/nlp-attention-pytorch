@@ -99,7 +99,7 @@ class Trainer:
                 'tgt_sos': self.model.tgt_sos,
                 'input_dim': self.model.input_dim,
                 'output_dim': self.model.output_dim,
-                'embedding_dim': self.model.embed_dim,
+                'embed_dim': self.model.embed_dim,
                 'hidden_dim': self.model.hidden_dim,
                 'attn_dim': self.model.attn_dim,
                 'num_layers': self.model.num_layers
@@ -126,8 +126,8 @@ class Trainer:
             'parameter': params,
             'src_lang': src_lang,
             'tgt_lang': tgt_lang,
-            'src_field': src_field,
-            'tgt_field': tgt_field
+            'src_vocab': src_field.vocab,
+            'tgt_vocab': tgt_field.vocab
         }
         torch.save(state, model_path)
 

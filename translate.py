@@ -1,27 +1,25 @@
-import re
-import yaml
-import argparse
-import unicodedata
 import torch
+import argparse
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from tokenizer import Tokenizer
 from seq2seq import Seq2seq
+from transformer import Transformer
 
-def preprocess(s):
-    # Turn a Unicode string to plain ASCII, thanks to
-    # http://stackoverflow.com/a/518232/2809427
-    def unicodeToAscii(s):
-        return ''.join(
-            c for c in unicodedata.normalize('NFD', s)
-            if unicodedata.category(c) != 'Mn'
-        )
-    # Lowercase, trim, and remove non-letter characters 
-    s = unicodeToAscii(s.lower().strip())
-    s = re.sub(r'([.!?])', r' \1', s)
-    s = re.sub(r'[^a-zA-Z.!?]+', r' ', s)
-    return s
+def load_model(model_path, device):
+
+    state = torch.load(model_path, map_location=device)
+
+    params = state['parameter']
+    if params['name'] == 'Transformer':
+        params.pop('name')
+        model = Transformer(**params)
+    else:
+        model = Seq2seq(**params)
+    model.to(device)
+    model.load_state_dict(state['state_dict'])
+
+    return model, state['src_lang'], state['tgt_lang'], state['src_vocab'], state['tgt_vocab']
 
 def translate(model, input_data, target_lang, max_length, device):
 
@@ -35,12 +33,12 @@ def translate(model, input_data, target_lang, max_length, device):
 
     return predicted_words, attention.cpu().numpy()
 
-def main(text, model_path, input_lang_path, target_lang_path, show_attention=False):
+def main(text, model_path, show_attention=False):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     # load model
-    model = Seq2seq.load(model_path, device)
+    model, src_lang, tgt_lang, src_vocab, tgt_vocab = load_model(model_path, device)
 
     # load tokenizer
     input_lang = Tokenizer(None)
@@ -75,11 +73,9 @@ if __name__ == '__main__':
 
     parser.add_argument('text', type=str,
                     help='Text to be translated')
-    parser.add_argument('--config', type=str, default='configs/translate_config.yaml',
-                    help='Configuration file path')
+    parser.add_argument('--model', type=str)
     parser.add_argument('--show-attention', action='store_true',
                     help='Plot attention')
 
     args = parser.parse_args()
-    kwargs = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
-    main(args.text, **kwargs, show_attention=args.show_attention)
+    main(args.text, args.model, args.show_attention)
