@@ -195,11 +195,19 @@ class Transformer(nn.Module):
                 model_dim, ff_dim, num_layers, num_heads, drop_prob):
         super(Transformer, self).__init__()
 
-        self.encoder = Encoder(input_dim, model_dim, ff_dim, num_layers, num_heads, max_len, drop_prob)
-        self.decoder = Decoder(output_dim, model_dim, ff_dim, num_layers, num_heads, max_len, drop_prob)
-
         self.src_pad = src_pad
         self.tgt_pad = tgt_pad
+        self.max_len = max_len
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.model_dim = model_dim
+        self.ff_dim = ff_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.drop_prob = drop_prob
+
+        self.encoder = Encoder(input_dim, model_dim, ff_dim, num_layers, num_heads, max_len, drop_prob)
+        self.decoder = Decoder(output_dim, model_dim, ff_dim, num_layers, num_heads, max_len, drop_prob)
 
     def forward(self, src, tgt):
 

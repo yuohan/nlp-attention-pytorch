@@ -279,28 +279,6 @@ class Seq2seq(nn.Module):
         #(target_length, batch_size, output_size), (target_length, batch_size, input_length)
         return torch.stack(deco_outputs, dim=0), torch.stack(attentions, dim=0)
 
-    def save(self, path, input_lang, target_lang, info=None):
-
-        state = {
-            'state_dict': self.state_dict(),
-            'parameter': {
-                'name': self.name,
-                'attn_name': self.attn_name,
-                'tgt_sos': self.tgt_sos,
-                'input_dim': self.input_dim,
-                'output_dim': self.output_dim,
-                'embedding_dim': self.embed_dim,
-                'hidden_dim': self.hidden_dim,
-                'attn_dim': self.attn_dim,
-                'num_layers': self.num_layers,
-            },
-            'input_lang': input_lang,
-            'target_lang': target_lang
-        }
-        if info != None:
-            state = {**info, **state}
-        torch.save(state, path)
-
     @classmethod
     def load(cls, state_path, device):
 

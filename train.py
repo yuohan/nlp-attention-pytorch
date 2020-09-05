@@ -85,6 +85,48 @@ class Trainer:
                 print(f'{phase} Loss: {epoch_loss[phase]:.4f}')
             print('-'*10)
 
+    def save(self, model_path, src_lang, tgt_lang, src_field, tgt_field):
+
+        name = type(self.model).__name__
+        if name == 'Seq2seq':
+            params = {
+                'name': self.model.name,
+                'attn_name': self.model.attn_name,
+                'tgt_sos': self.model.tgt_sos,
+                'input_dim': self.model.input_dim,
+                'output_dim': self.model.output_dim,
+                'embedding_dim': self.model.embed_dim,
+                'hidden_dim': self.model.hidden_dim,
+                'attn_dim': self.model.attn_dim,
+                'num_layers': self.model.num_layers
+            }
+        elif name == 'Transformer':
+            params = {
+                'name': name,
+                'src_pad': self.model.src_pad,
+                'tgt_pad': self.model.tgt_pad,
+                'max_len': self.model.max_len,
+                'input_dim': self.model.input_dim,
+                'output_dim': self.model.output_dim,
+                'model_dim': self.model.model_dim,
+                'ff_dim': self.model.ff_dim,
+                'num_layers': self.model.num_layers,
+                'num_heads': self.model.num_heads,
+                'drop_prob': self.model.drop_prob
+            }
+        else:
+            return
+
+        state = {
+            'state_dict': self.model.state_dict(),
+            'parameter': params,
+            'src_lang': src_lang,
+            'tgt_lang': tgt_lang,
+            'src_field': src_field,
+            'tgt_field': tgt_field
+        }
+        torch.save(state, model_path)
+
 def main(data_path, save_path, src_lang, tgt_lang,
         epochs, batch_size, learning_rate, model_params):
 
@@ -121,8 +163,7 @@ def main(data_path, save_path, src_lang, tgt_lang,
     model.to(device)
     trainer = Trainer(model, train_iterator, val_iterator, tgt_pad)
     trainer.train(epochs, learning_rate)
-
-    model.save(f'{save_path}/model.pth', input_lang, target_lang)
+    trainer.save(save_path, src_lang, tgt_lang, src_field, tgt_field)
     
 if __name__ == '__main__':
 
