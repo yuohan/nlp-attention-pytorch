@@ -1,5 +1,7 @@
+import spacy
 import yaml
 import argparse
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -7,30 +9,32 @@ import torch.optim as optim
 
 from torchtext.datasets import Multi30k
 from torchtext.data import Field, BucketIterator
-from torchtext.data.utils import get_tokenizer
 
 from seq2seq import Seq2seq
 from transformer import Transformer
 
-def make_datasets(input_lang_name, target_lang_name, batch_size, device):
+def tokenize(text, spacy):
+    return [tok.text for tok in spacy.tokenizer(text)]
 
-    input_lang = Field(tokenize=get_tokenizer('spacy', language=input_lang_name),
+def make_datasets(src_lang, tgt_lang, batch_size, device):
+
+    src_field = Field(tokenize=partial(tokenize, spacy=spacy.load(src_lang)),
                 init_token='<sos>',
                 eos_token='<eos>',
                 lower=True)
 
-    target_lang = Field(tokenize=get_tokenizer('spacy', language=target_lang_name),
+    tgt_field = Field(tokenize=partial(tokenize, spacy=spacy.load(tgt_lang)),
                 init_token='<sos>',
                 eos_token='<eos>',
                 lower=True)
 
-    exts = ('.'+input_lang_name, '.'+target_lang_name)
-    train_data, valid_data, _ = Multi30k.splits(exts=exts, fields=(input_lang, target_lang))
-    input_lang.build_vocab(train_data)
-    target_lang.build_vocab(train_data)
+    exts = ('.'+src_lang, '.'+tgt_lang)
+    train_data, valid_data, _ = Multi30k.splits(exts=exts, fields=(src_field, tgt_field))
+    src_field.build_vocab(train_data)
+    tgt_field.build_vocab(train_data)
 
     train_iterator, valid_iterator = BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device)
-    return train_iterator, valid_iterator, input_lang, target_lang
+    return train_iterator, valid_iterator, src_field, tgt_field
 
 class Trainer:
 
