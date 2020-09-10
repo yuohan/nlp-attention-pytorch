@@ -1,3 +1,4 @@
+import spacy
 import torch
 import argparse
 import seaborn as sns
@@ -21,17 +22,52 @@ def load_model(model_path, device):
 
     return model, state['src_lang'], state['tgt_lang'], state['src_vocab'], state['tgt_vocab']
 
-def translate(model, input_data, target_lang, max_length, device):
+def translate(model, src, tgt_vocab, max_len=50):
 
-    with torch.no_grad():
-        input_tensor = torch.tensor(input_data, dtype=torch.long, device=device).view(-1, 1)
-        input_length = input_tensor.size(0)
+    model.eval()
 
-        output, attention = model(input_tensor, max_length)
-        topv, topi = output.topk(1, dim=2)
-        predicted_words = target_lang.to_text([topi.squeeze().tolist()])
+    dec_outputs = [tgt_vocab.stoi['<sos>']]
 
-    return predicted_words, attention.cpu().numpy()
+    if type(model).__name__ == 'Transformer':
+        # encoder
+        src_mask = model.get_src_mask(src)
+        with torch.no_grad():
+            enc_outputs = model.encoder(src, src_mask)
+        # decoder
+        
+        for i in range(max_len):
+            dec_input = torch.tensor(dec_outputs, dtype=torch.long, device=src.device).unsqueeze(1)
+            tgt_mask = model.get_tgt_mask(dec_input)
+
+            with torch.no_grad():
+                output, _ = model.decoder(dec_input, enc_outputs, src_mask, tgt_mask)
+            
+            pred = output.argmax(2)[-1,:].item()
+            
+            dec_outputs.append(pred)
+            if pred == tgt_vocab.stoi['<eos>']:
+                break
+    else: #seq2seq
+        # encoder
+        with torch.no_grad():
+            enc_outputs, enc_hidden = model.encoder(src)
+        # decoder
+        dec_hidden = enc_hidden
+        for i in range(max_len):
+            dec_input = torch.tensor(dec_outputs[-1], dtype=torch.long, device=src.device).view(1,1)
+
+            with torch.no_grad():
+                dec_output, dec_hidden, _ = model.decoder(dec_input, dec_hidden, enc_outputs)
+
+            topv, topi = dec_output.topk(1, dim=1)
+            pred = topi.item()
+
+            dec_outputs.append(pred)
+            if pred == tgt_vocab.stoi['<eos>']:
+                break
+
+    translated = [tgt_vocab.itos[i] for i in dec_outputs]
+    return translated
 
 def main(text, model_path, show_attention=False):
 
@@ -40,21 +76,17 @@ def main(text, model_path, show_attention=False):
     # load model
     model, src_lang, tgt_lang, src_vocab, tgt_vocab = load_model(model_path, device)
 
-    # load tokenizer
-    input_lang = Tokenizer(None)
-    input_lang.load(input_lang_path)
+    # text to tensor
+    tokens = ['<sos>'] + [token.text.lower() for token in spacy.load(src_lang)(text)] + ['<eos>']
+    indices = [src_vocab.stoi[token] for token in tokens]
+    src = torch.tensor(indices, dtype=torch.long, device=device).unsqueeze(1)
 
-    target_lang = Tokenizer(None)
-    target_lang.load(target_lang_path)
-
-    input_data = input_lang.to_token([preprocess(text)])
-
-    result, attention = translate(model, input_data, target_lang, target_lang.max_len, device)
+    translated = translate(model, src, tgt_vocab)
 
     print ('Input text:')
     print (text)
     print ('Translated text:')
-    print (result[0])
+    print (translated)
 
     if show_attention:
         xticklabels = text.split(' ') + ['<EOS>']
@@ -66,7 +98,6 @@ def main(text, model_path, show_attention=False):
         ax.xaxis.set_ticks_position('top')
         plt.show()
 
-    
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Translate with pretraied model')

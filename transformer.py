@@ -212,11 +212,17 @@ class Transformer(nn.Module):
     def forward(self, src, tgt):
 
         tgt = tgt[:-1]
-        
-        # input mask
+        src_mask = self.get_src_mask(src)
+        tgt_mask = self.get_tgt_mask(tgt)
+        return self.decoder(tgt, self.encoder(src, src_mask), src_mask, tgt_mask)
+
+    def get_src_mask(self, src):
+        # source mask
         # (1, batch_size, 1, input_len)
         src_mask = (src == self.src_pad).transpose(0, 1).unsqueeze(1).unsqueeze(0)
+        return src_mask
 
+    def get_tgt_mask(self, tgt):
         # target mask
         tgt_len = tgt.size(0)
         # (target_len, target_len)
@@ -225,5 +231,4 @@ class Transformer(nn.Module):
         pad_mask = (tgt == self.tgt_pad).transpose(0, 1).unsqueeze(1).unsqueeze(0)
         # (1, batch_size, target_len, target_len)
         tgt_mask = sub_mask | pad_mask
-
-        return self.decoder(tgt, self.encoder(src, src_mask), src_mask, tgt_mask)
+        return tgt_mask
