@@ -63,13 +63,12 @@ class Trainer:
                 for batch in tqdm(self.data_loaders[phase]):
                     src = batch.src
                     trg = batch.trg
-                    trg_len = trg.size(0)
 
                     optimizer.zero_grad()
 
                     loss = 0
                     with torch.set_grad_enabled(phase == 'train'):
-                        output, _ = self.model(src, trg)
+                        output = self.model(src, trg)
 
                         d_out = output.shape[-1]
                         output = output.contiguous().view(-1, d_out)
@@ -81,7 +80,7 @@ class Trainer:
                             loss.backward()
                             optimizer.step()
 
-                        epoch_loss[phase] += loss.item()/ trg_len
+                        epoch_loss[phase] += loss.item()
 
                 epoch_loss[phase] /= len(self.data_loaders[phase])
 

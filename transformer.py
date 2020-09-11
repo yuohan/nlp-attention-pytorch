@@ -47,6 +47,8 @@ class MultiHeadAttentionLayer(nn.Module):
         self.fc_v = nn.Linear(model_dim, model_dim)
         self.fc_out = nn.Linear(model_dim, model_dim)
 
+        self.attn = None
+
     def forward(self, query, key, value, mask=None):
 
         batch_size = query.size(1)
@@ -57,14 +59,15 @@ class MultiHeadAttentionLayer(nn.Module):
             for l, x in zip((self.fc_q, self.fc_k, self.fc_v), (query, key, value))]
 
         # scaled dot-product attention
-        # (num_heads, batch_size, seq_len, seq_len)
+        # (num_heads, batch_size, query_len, key_len)
         scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.d_k)
 
         if mask is not None:
             scores = scores.masked_fill(mask, float('-inf'))
         
         align = F.softmax(scores, dim=-1)
-        # (heads, batch_size, seq_len, d_k)
+        self.attn = align
+        # (heads, batch_size, query_len, d_k)
         x = torch.matmul(align, value)
 
         # concat
@@ -187,7 +190,7 @@ class Decoder(nn.Module):
         for layer in self.layers:
             x = layer(x, encoder_outputs, src_mask, tgt_mask)
             
-        return F.log_softmax(self.fc_out(x), dim=2), None
+        return F.log_softmax(self.fc_out(x), dim=2)
 
 class Transformer(nn.Module):
 

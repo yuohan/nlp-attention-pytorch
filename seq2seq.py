@@ -261,20 +261,16 @@ class Seq2seq(nn.Module):
 
         # decoder
         dec_outputs = []
-        attentions = []
-
         dec_input = torch.tensor(self.tgt_sos, dtype=torch.long, device=tgt.device).expand(1, batch_size)
         dec_hidden = enc_hidden
 
         for i in range(1, target_length):
-            dec_output, dec_hidden, attention = \
-                self.decoder(dec_input, dec_hidden, enc_outputs)
+            dec_output, dec_hidden, _ = self.decoder(dec_input, dec_hidden, enc_outputs)
 
             topv, topi = dec_output.topk(1, dim=1)
             dec_input = topi.detach().t()
 
             dec_outputs.append(dec_output)
-            attentions.append(attention.squeeze())
 
-        #(target_length, batch_size, output_size), (target_length, batch_size, input_length)
-        return torch.stack(deco_outputs, dim=0), torch.stack(attentions, dim=0)
+        #(target_length, batch_size, output_size)
+        return torch.stack(dec_outputs, dim=0)
