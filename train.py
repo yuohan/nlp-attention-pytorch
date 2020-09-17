@@ -1,6 +1,9 @@
 import spacy
 import yaml
+import io
+import random
 import argparse
+from tqdm.auto import tqdm
 from functools import partial
 
 import torch
@@ -8,7 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from torchtext.datasets import Multi30k
-from torchtext.data import Field, BucketIterator
+from torchtext.data import Field, Example, Dataset, BucketIterator, interleave_keys
 
 from seq2seq import Seq2seq
 from transformer import Transformer
@@ -16,7 +19,7 @@ from transformer import Transformer
 def tokenize(text, spacy):
     return [tok.text for tok in spacy.tokenizer(text)]
 
-def make_datasets(src_lang, tgt_lang, batch_size, device):
+def make_datasets(data_path, src_lang, tgt_lang, src_first, batch_size, device):
 
     src_field = Field(tokenize=partial(tokenize, spacy=spacy.load(src_lang)),
                 init_token='<sos>',
@@ -28,12 +31,34 @@ def make_datasets(src_lang, tgt_lang, batch_size, device):
                 eos_token='<eos>',
                 lower=True)
 
-    exts = ('.'+src_lang, '.'+tgt_lang)
-    train_data, valid_data, _ = Multi30k.splits(exts=exts, fields=(src_field, tgt_field))
+    if data_path.lower() == 'multi30k':
+
+        exts = ('.'+src_lang, '.'+tgt_lang)
+        train_data, valid_data, _ = Multi30k.splits(exts=exts, fields=(src_field, tgt_field))
+    
+    else:
+
+        examples = []
+        fields = [('src', src_field), ('trg', tgt_field)]
+        with io.open(data_path, mode='r', encoding='utf-8') as pair_file:
+            for pair_line in pair_file:
+                pair_line = pair_line.strip().split('\t')
+                src_line, tgt_line = pair_line[0], pair_line[1] if src_first else pair_line[1], pair_line[0]
+                if src_line != '' and tgt_line != '':
+                    examples.append(Example.fromlist([src_line, tgt_line], fields))
+            
+            # split train / valid set
+            random.shuffle(examples)
+            idx = int(len(examples)*0.8)
+            train_example, valid_example = examples[:idx], examples[idx:]
+
+            train_data = Dataset(train_example, fields)
+            valid_data = Dataset(valid_example, fields)
+
     src_field.build_vocab(train_data)
     tgt_field.build_vocab(train_data)
 
-    train_iterator, valid_iterator = BucketIterator.splits((train_data, valid_data), batch_size=batch_size, device=device)
+    train_iterator, valid_iterator = BucketIterator.splits((train_data, valid_data), batch_size=batch_size, sort_key=lambda x: interleave_keys(len(x.src), len(x.trg)), device=device)
     return train_iterator, valid_iterator, src_field, tgt_field
 
 class Trainer:
@@ -130,12 +155,12 @@ class Trainer:
         }
         torch.save(state, model_path)
 
-def main(data_path, save_path, src_lang, tgt_lang,
+def main(data_path, save_path, src_lang, tgt_lang, src_first,
         epochs, batch_size, learning_rate, model_params):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    train_iterator, val_iterator, src_field, tgt_field = make_datasets(src_lang, tgt_lang, batch_size, device)
+    train_iterator, val_iterator, src_field, tgt_field = make_datasets(data_path, src_lang, tgt_lang, src_first, batch_size, device)
     
     tgt_sos = tgt_field.vocab.stoi[tgt_field.init_token]
     src_pad = src_field.vocab.stoi[src_field.pad_token]
@@ -179,9 +204,10 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--batch', type=int, default=128)
     parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--src-first', action='store_true')
     parser.add_argument('--config', type=str, default='configs/train_config.yaml',
                     help='Configuration file path')
 
     args = parser.parse_args()
     model_params = yaml.load(open(args.config, 'r'), Loader=yaml.FullLoader)
-    main(args.data_dir, args.save_dir, args.src, args.tgt, args.epochs, args.batch, args.lr, model_params)
+    main(args.data_dir, args.save_dir, args.src, args.tgt, args.src_first, args.epochs, args.batch, args.lr, model_params)
