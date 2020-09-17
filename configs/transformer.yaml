@@ -1,0 +1,7 @@
+model_name: Transformer
+max_len: 100
+model_dim: 256
+ff_dim: 512
+num_layers: 3
+num_heads: 8
+drop_prop: 0.1

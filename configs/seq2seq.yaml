@@ -1,0 +1,6 @@
+model_name: Luong
+attn_name: dot
+hidden_dim: 512
+embed_dim: 256
+attn_dim: 512
+num_layers: 1

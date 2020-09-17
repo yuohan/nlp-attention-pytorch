@@ -1,16 +1,15 @@
-# nlp-attention-pytorch
-Pytorch implementation of sequence-to-sequence translate models
+# nmt-pytorch
+Pytorch implementation of neural machine translation (seq2seq, transformer)
 
 ## Usage
 Train
 ```bash
-python train.py --config configs/train_config.yaml
+python train.py de en --data-dir=multi30k --save-dir=./ --epochs=8 --batch=128 --lr=0.0005 --config=configs/transformer.yaml
 ```
 Translate
 ```bash
-python translate.py --config configs/translate_conifig.yaml --show-attention
+python translate.py 'sentence to translated' --model=model.pth
 ```
 
 ## Result
-<img src="images/sample_attention.png"/>
-Sample attention matrix
+Sample attention visualizations are on images folder
